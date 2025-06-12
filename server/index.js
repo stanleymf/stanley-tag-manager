@@ -326,6 +326,7 @@ async function getCustomerSegments() {
 
   console.log('Store URL:', process.env.SHOPIFY_STORE_URL);
   console.log('Access Token configured:', !!process.env.SHOPIFY_ACCESS_TOKEN);
+  console.log('All env vars starting with SHOPIFY:', Object.keys(process.env).filter(key => key.startsWith('SHOPIFY')));
 
   try {
     // Fetch real Shopify customer segments using GraphQL
@@ -349,6 +350,9 @@ async function getCustomerSegments() {
       }
     `;
 
+    console.log('Making GraphQL request to:', `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`);
+    console.log('Using access token length:', process.env.SHOPIFY_ACCESS_TOKEN?.length || 0);
+    
     const response = await fetch(
       `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
       {
@@ -359,7 +363,7 @@ async function getCustomerSegments() {
         },
         body: JSON.stringify({
           query,
-          variables: { first: 300 }
+          variables: { first: 100 }
         })
       }
     );
@@ -374,7 +378,8 @@ async function getCustomerSegments() {
     }
 
     const data = await response.json();
-    console.log('GraphQL Response:', JSON.stringify(data, null, 2));
+    console.log('GraphQL Response Status:', response.status);
+    console.log('GraphQL Response Data:', JSON.stringify(data, null, 2));
 
     if (data.errors) {
       console.error('GraphQL errors:', data.errors);
