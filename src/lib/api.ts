@@ -110,11 +110,34 @@ class ApiService {
     });
   }
 
-  // Execute a tagging rule
-  async executeRule(rule: TaggingRule): Promise<RuleExecutionResult> {
-    return this.request<RuleExecutionResult>('/rules', {
+  // Tagging Rules CRUD operations
+  async getRules(): Promise<TaggingRule[]> {
+    return this.request<TaggingRule[]>('/rules');
+  }
+
+  async createRule(rule: Omit<TaggingRule, 'id' | 'createdAt'>): Promise<TaggingRule> {
+    return this.request<TaggingRule>('/rules', {
       method: 'POST',
       body: JSON.stringify(rule),
+    });
+  }
+
+  async updateRule(ruleId: string, rule: Omit<TaggingRule, 'id' | 'createdAt'>): Promise<TaggingRule> {
+    return this.request<TaggingRule>(`/rules/${ruleId}`, {
+      method: 'PUT',
+      body: JSON.stringify(rule),
+    });
+  }
+
+  async deleteRule(ruleId: string): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/rules/${ruleId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async executeRule(ruleId: string): Promise<RuleExecutionResult> {
+    return this.request<RuleExecutionResult>(`/rules/${ruleId}/execute`, {
+      method: 'POST',
     });
   }
 

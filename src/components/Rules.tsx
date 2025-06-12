@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -17,15 +17,36 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Plus, MoreHorizontal, Edit, Trash2, Settings, Play } from "lucide-react";
-import { mockRules, type TaggingRule } from "@/data/mockData";
+import { Plus, MoreHorizontal, Edit, Trash2, Settings, Play, RefreshCw, AlertCircle } from "lucide-react";
+import { type TaggingRule } from "@/data/mockData";
 import { apiService } from "@/lib/api";
 import { RuleForm } from "./RuleForm";
 
 export function Rules() {
-  const [rules, setRules] = useState<TaggingRule[]>(mockRules);
+  const [rules, setRules] = useState<TaggingRule[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<TaggingRule | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Load rules from database on component mount
+  useEffect(() => {
+    loadRules();
+  }, []);
+
+  const loadRules = async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const rulesFromDb = await apiService.getRules();
+      setRules(rulesFromDb);
+    } catch (err) {
+      console.error('Error loading rules:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load rules');
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
   const handleCreateRule = () => {
     setEditingRule(null);
@@ -37,34 +58,53 @@ export function Rules() {
     setIsFormOpen(true);
   };
 
-  const handleDeleteRule = (ruleId: string) => {
-    setRules(rules.filter(rule => rule.id !== ruleId));
-  };
-
-  const handleToggleRule = (ruleId: string) => {
-    setRules(rules.map(rule => 
-      rule.id === ruleId ? { ...rule, isActive: !rule.isActive } : rule
-    ));
-  };
-
-  const handleSaveRule = (ruleData: Omit<TaggingRule, 'id' | 'createdAt'>) => {
-    if (editingRule) {
-      // Update existing rule
-      setRules(rules.map(rule => 
-        rule.id === editingRule.id 
-          ? { ...rule, ...ruleData }
-          : rule
-      ));
-    } else {
-      // Create new rule
-      const newRule: TaggingRule = {
-        ...ruleData,
-        id: `rule-${Date.now()}`,
-        createdAt: new Date().toISOString()
-      };
-      setRules([...rules, newRule]);
+  const handleDeleteRule = async (ruleId: string) => {
+    try {
+      await apiService.deleteRule(ruleId);
+      setRules(rules.filter(rule => rule.id !== ruleId));
+    } catch (error) {
+      console.error('Error deleting rule:', error);
+      alert('Failed to delete rule: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
-    setIsFormOpen(false);
+  };
+
+  const handleToggleRule = async (ruleId: string) => {
+    try {
+      const rule = rules.find(r => r.id === ruleId);
+      if (!rule) return;
+
+      const updatedRule = await apiService.updateRule(ruleId, {
+        ...rule,
+        isActive: !rule.isActive
+      });
+
+      setRules(rules.map(r => 
+        r.id === ruleId ? updatedRule : r
+      ));
+    } catch (error) {
+      console.error('Error toggling rule:', error);
+      alert('Failed to update rule: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
+  };
+
+  const handleSaveRule = async (ruleData: Omit<TaggingRule, 'id' | 'createdAt'>) => {
+    try {
+      if (editingRule) {
+        // Update existing rule
+        const updatedRule = await apiService.updateRule(editingRule.id, ruleData);
+        setRules(rules.map(rule => 
+          rule.id === editingRule.id ? updatedRule : rule
+        ));
+      } else {
+        // Create new rule
+        const newRule = await apiService.createRule(ruleData);
+        setRules([...rules, newRule]);
+      }
+      setIsFormOpen(false);
+    } catch (error) {
+      console.error('Error saving rule:', error);
+      alert('Failed to save rule: ' + (error instanceof Error ? error.message : 'Unknown error'));
+    }
   };
 
   const handleExecuteRule = async (rule: TaggingRule) => {
@@ -74,7 +114,7 @@ export function Rules() {
     }
 
     try {
-      const result = await apiService.executeRule(rule);
+      const result = await apiService.executeRule(rule.id);
       alert(`Rule executed successfully!\n${result.customersProcessed} customers processed\n${result.success} successful updates\n${result.failed} failed updates`);
     } catch (error) {
       alert('Failed to execute rule: ' + (error instanceof Error ? error.message : 'Unknown error'));
@@ -93,6 +133,35 @@ export function Rules() {
 
   const activeRulesCount = rules.filter(rule => rule.isActive).length;
 
+  if (isLoading) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="flex items-center justify-center py-12">
+          <RefreshCw className="h-8 w-8 animate-spin text-blue-600 mr-3" />
+          <span className="text-lg text-gray-600">Loading tagging rules...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 space-y-6">
+        <div className="flex items-center justify-center py-12">
+          <div className="text-center">
+            <AlertCircle className="h-12 w-12 text-red-500 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 mb-2">Failed to Load Rules</h3>
+            <p className="text-gray-600 mb-4">{error}</p>
+            <Button onClick={loadRules} className="bg-blue-600 hover:bg-blue-700">
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Try Again
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -100,13 +169,23 @@ export function Rules() {
           <h1 className="text-2xl font-semibold text-gray-900">Tagging Rules</h1>
           <p className="text-gray-600 mt-1">Automate customer tagging based on segment membership</p>
         </div>
-        <Button 
-          onClick={handleCreateRule}
-          className="bg-blue-600 hover:bg-blue-700"
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Create Rule
-        </Button>
+        <div className="flex gap-2">
+          <Button 
+            onClick={loadRules}
+            variant="outline"
+            className="border-gray-300"
+          >
+            <RefreshCw className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
+          <Button 
+            onClick={handleCreateRule}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Create Rule
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -149,8 +228,11 @@ export function Rules() {
           {rules.length === 0 ? (
             <div className="text-center py-12">
               <Settings className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No rules created yet</h3>
-              <p className="text-gray-600 mb-4">Create your first tagging rule to automate customer management</p>
+              <h3 className="text-lg font-medium text-gray-900 mb-2">No rules found</h3>
+              <p className="text-gray-600 mb-4">
+                Create your first tagging rule to automate customer management.<br/>
+                <span className="text-sm text-green-600">✅ Connected to database - rules will persist across deployments!</span>
+              </p>
               <Button onClick={handleCreateRule} className="bg-blue-600 hover:bg-blue-700">
                 <Plus className="h-4 w-4 mr-2" />
                 Create Your First Rule
