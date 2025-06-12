@@ -639,7 +639,7 @@ async function getCustomerSegments() {
         },
         body: JSON.stringify({
           query,
-          variables: { first: 100 }
+          variables: { first: 300 }
         })
       }
     );
@@ -998,7 +998,7 @@ async function getCustomersFromShopifySegment(segmentId) {
         },
         body: JSON.stringify({
           query,
-          variables: { segmentId, first: 250 }
+          variables: { segmentId, first: 300 }
         })
       }
     );
@@ -1054,18 +1054,18 @@ async function getCustomersFromBasicSegment(segmentName) {
   
   switch (segmentName) {
     case 'All Customers':
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=250`;
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=300`;
       break;
     case 'VIP Customers':
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VIP&limit=250`;
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VIP&limit=300`;
       break;
     case 'VVIP Customers':
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VVIP&limit=250`;
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VVIP&limit=300`;
       break;
     case 'New Customers':
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?created_at_min=${thirtyDaysAgo.toISOString()}&limit=250`;
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?created_at_min=${thirtyDaysAgo.toISOString()}&limit=300`;
       break;
     default:
       return [];
