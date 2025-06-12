@@ -149,6 +149,150 @@ app.get('/api/health', (req, res) => {
   res.json(config);
 });
 
+// Debug endpoint to show environment variables
+app.get('/api/debug/env', (req, res) => {
+  try {
+    const envVars = {
+      shopifyVars: {},
+      authVars: {},
+      systemVars: {}
+    };
+
+    // Get all environment variables starting with SHOPIFY
+    Object.keys(process.env).forEach(key => {
+      if (key.startsWith('SHOPIFY')) {
+        envVars.shopifyVars[key] = {
+          exists: !!process.env[key],
+          length: process.env[key]?.length || 0,
+          prefix: process.env[key]?.substring(0, 10) || 'undefined'
+        };
+      }
+    });
+
+    // Get auth-related variables
+    ['AUTH_USERNAME', 'AUTH_PASSWORD', 'SESSION_SECRET'].forEach(key => {
+      envVars.authVars[key] = {
+        exists: !!process.env[key],
+        length: process.env[key]?.length || 0,
+        value: key === 'AUTH_USERNAME' ? process.env[key] : '***masked***'
+      };
+    });
+
+    // Get system variables
+    ['NODE_ENV', 'PORT', 'npm_package_version'].forEach(key => {
+      envVars.systemVars[key] = process.env[key] || 'undefined';
+    });
+
+    // Summary
+    const summary = {
+      totalEnvVars: Object.keys(process.env).length,
+      shopifyVarsCount: Object.keys(envVars.shopifyVars).length,
+      allShopifyKeys: Object.keys(process.env).filter(key => key.includes('SHOPIFY') || key.includes('STORE') || key.includes('ACCESS')),
+      timestamp: new Date().toISOString()
+    };
+
+    res.json({
+      summary,
+      variables: envVars,
+      message: 'Environment variables debug info'
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to get environment variables',
+      details: error.message
+    });
+  }
+});
+
+// Debug endpoint to test GraphQL query specifically
+app.get('/api/debug/graphql', async (req, res) => {
+  try {
+    console.log('=== GraphQL DEBUG ENDPOINT CALLED ===');
+    
+    const storeUrl = process.env.SHOPIFY_STORE_URL;
+    const accessToken = process.env.SHOPIFY_ACCESS_TOKEN;
+    
+    if (!storeUrl || !accessToken) {
+      return res.json({
+        error: 'Missing credentials',
+        storeUrl: !!storeUrl,
+        accessToken: !!accessToken,
+        storeUrlValue: storeUrl ? storeUrl.substring(0, 20) + '...' : 'undefined',
+        accessTokenLength: accessToken?.length || 0
+      });
+    }
+
+    const query = `
+      query getSegments($first: Int!) {
+        segments(first: $first) {
+          edges {
+            node {
+              id
+              name
+              query
+              creationDate
+              lastEditDate
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    `;
+
+    console.log('Making GraphQL request...');
+    const response = await fetch(
+      `${storeUrl}/admin/api/2023-10/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': accessToken,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: { first: 5 } // Start with just 5 for debugging
+        })
+      }
+    );
+
+    console.log('GraphQL Response Status:', response.status);
+    const responseText = await response.text();
+    console.log('GraphQL Raw Response:', responseText);
+
+    let data;
+    try {
+      data = JSON.parse(responseText);
+    } catch (parseError) {
+      return res.json({
+        error: 'Failed to parse response',
+        status: response.status,
+        rawResponse: responseText.substring(0, 500),
+        parseError: parseError.message
+      });
+    }
+
+    res.json({
+      success: response.ok,
+      status: response.status,
+      data: data,
+      segmentCount: data.data?.segments?.edges?.length || 0,
+      hasErrors: !!data.errors,
+      errors: data.errors || null
+    });
+
+  } catch (error) {
+    console.error('GraphQL debug error:', error);
+    res.status(500).json({
+      error: 'GraphQL debug failed',
+      details: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // Debug endpoint to test Shopify connection
 app.get('/api/debug/shopify', async (req, res) => {
   try {
