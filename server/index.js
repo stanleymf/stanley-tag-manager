@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -30,12 +31,71 @@ let segmentsCache = null;
 let cacheTimestamp = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-// API Routes
-app.get('/api/segments', handleSegments);
-app.post('/api/segments/sync', handleSegmentsSync);
-app.get('/api/customers', handleCustomers);
-app.post('/api/bulk-tag', handleBulkTag);
-app.post('/api/rules', handleRules);
+// Authentication configuration
+const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'windflower2024';
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Simple session store (in production, use Redis or proper session store)
+const sessions = new Map();
+
+// Authentication middleware
+function requireAuth(req, res, next) {
+  // Skip auth for health check
+  if (req.path === '/api/health') {
+    return next();
+  }
+
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith('Basic ')) {
+    return res.status(401).json({ 
+      error: 'Authentication required',
+      message: 'Please provide valid credentials' 
+    });
+  }
+
+  const base64Credentials = authHeader.split(' ')[1];
+  const credentials = Buffer.from(base64Credentials, 'base64').toString('ascii');
+  const [username, password] = credentials.split(':');
+
+  if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
+    next();
+  } else {
+    res.status(401).json({ 
+      error: 'Invalid credentials',
+      message: 'Username or password is incorrect' 
+    });
+  }
+}
+
+// Login endpoint
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  
+  if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
+    const sessionId = crypto.randomBytes(32).toString('hex');
+    sessions.set(sessionId, { username, createdAt: Date.now() });
+    
+    res.json({ 
+      success: true, 
+      sessionId,
+      message: 'Login successful' 
+    });
+  } else {
+    res.status(401).json({ 
+      success: false, 
+      message: 'Invalid credentials' 
+    });
+  }
+});
+
+// Protected API Routes
+app.get('/api/segments', requireAuth, handleSegments);
+app.post('/api/segments/sync', requireAuth, handleSegmentsSync);
+app.get('/api/customers', requireAuth, handleCustomers);
+app.post('/api/bulk-tag', requireAuth, handleBulkTag);
+app.post('/api/rules', requireAuth, handleRules);
 
 // Health check
 app.get('/api/health', (req, res) => {

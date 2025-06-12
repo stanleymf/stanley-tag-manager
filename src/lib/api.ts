@@ -50,15 +50,33 @@ export interface RuleExecutionResult extends BulkTagResult {
 }
 
 class ApiService {
+  private getAuthHeaders(): Record<string, string> {
+    const credentials = localStorage.getItem('auth_credentials');
+    if (credentials) {
+      return {
+        'Authorization': `Basic ${credentials}`,
+      };
+    }
+    return {};
+  }
+
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     try {
       const response = await fetch(`${API_BASE_URL}${endpoint}`, {
         ...options,
         headers: {
           'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
           ...options?.headers,
         },
       });
+
+      if (response.status === 401) {
+        // Clear invalid credentials and redirect to login
+        localStorage.removeItem('auth_credentials');
+        window.location.reload();
+        throw new Error('Authentication required');
+      }
 
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
