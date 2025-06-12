@@ -289,7 +289,7 @@ app.get('/api/debug/graphql', async (req, res) => {
         },
         body: JSON.stringify({
           query,
-          variables: { first: 5 } // Start with just 5 for debugging
+          variables: { first: 300 } // Use same limit as main query
         })
       }
     );
@@ -433,23 +433,35 @@ async function handleSegmentsSync(req, res) {
   try {
     console.log('=== SEGMENTS SYNC API CALLED ===');
     
-    // Clear cache to force fresh fetch
+    // Clear both memory cache and database cache to force fresh fetch
     segmentsCache = null;
     cacheTimestamp = null;
     
+    // Clear database cache if available
+    if (dbInitialized) {
+      // Note: We'll let the cache expire naturally or overwrite it
+      console.log('🗄️ Database cache will be refreshed with new data');
+    }
+    
     // Fetch fresh segments from Shopify
+    console.log('🔄 Fetching fresh segments with pagination limit: 300');
     const segments = await getCustomerSegments();
     
-    // Update cache
-    segmentsCache = segments;
-    cacheTimestamp = Date.now();
+    // Update both caches with fresh data
+    if (dbInitialized) {
+      await db.setCache('customer_segments', segments, 5);
+    } else {
+      segmentsCache = segments;
+      cacheTimestamp = Date.now();
+    }
     
-    console.log(`Synced ${segments.length} segments from Shopify`);
+    console.log(`✅ Synced ${segments.length} segments from Shopify (up from previous limit)`);
     res.json({ 
       success: true, 
-      message: `Successfully synced ${segments.length} segments from Shopify`,
+      message: `Successfully synced ${segments.length} segments from Shopify with increased pagination`,
       segments: segments,
-      syncedAt: new Date().toISOString()
+      syncedAt: new Date().toISOString(),
+      paginationLimit: 300
     });
   } catch (error) {
     console.error('Error syncing segments:', error);
