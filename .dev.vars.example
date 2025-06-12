@@ -1,0 +1,8 @@
+# Development Environment Variables for Cloudflare Workers
+# Copy this file to .dev.vars and fill in your actual values
+
+# Your Shopify store URL (including https://)
+SHOPIFY_STORE_URL=https://your-store-name.myshopify.com
+
+# Your Shopify Private App access token (starts with shpat_)
+SHOPIFY_ACCESS_TOKEN=shpat_your_access_token_here 
