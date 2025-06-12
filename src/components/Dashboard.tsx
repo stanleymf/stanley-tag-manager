@@ -11,14 +11,17 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { RefreshCw, Users, AlertCircle } from "lucide-react";
+import { RefreshCw, Users, AlertCircle, Eye } from "lucide-react";
 import { apiService, type CustomerSegment } from "@/lib/api";
+import { CustomerListModal } from "./CustomerListModal";
 
 export function Dashboard() {
   const [segments, setSegments] = useState<CustomerSegment[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedSegment, setSelectedSegment] = useState<CustomerSegment | null>(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   const loadSegments = async (showRefreshing = false) => {
     try {
@@ -46,6 +49,16 @@ export function Dashboard() {
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString();
+  };
+
+  const handleViewCustomers = (segment: CustomerSegment) => {
+    setSelectedSegment(segment);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedSegment(null);
   };
 
   const totalCustomers = segments.reduce((sum, segment) => sum + segment.customerCount, 0);
@@ -149,6 +162,7 @@ export function Dashboard() {
                   <TableHead className="font-medium text-gray-700">Customer Count</TableHead>
                   <TableHead className="font-medium text-gray-700">Last Sync</TableHead>
                   <TableHead className="font-medium text-gray-700">Status</TableHead>
+                  <TableHead className="font-medium text-gray-700">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -162,6 +176,17 @@ export function Dashboard() {
                         Synced
                       </Badge>
                     </TableCell>
+                    <TableCell>
+                      <Button
+                        onClick={() => handleViewCustomers(segment)}
+                        variant="outline"
+                        size="sm"
+                        className="text-blue-600 border-blue-600 hover:bg-blue-50"
+                      >
+                        <Eye className="h-4 w-4 mr-1" />
+                        View Customers
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -169,6 +194,12 @@ export function Dashboard() {
           )}
         </CardContent>
       </Card>
+
+      <CustomerListModal
+        isOpen={isModalOpen}
+        onClose={handleCloseModal}
+        segment={selectedSegment}
+      />
     </div>
   );
 }

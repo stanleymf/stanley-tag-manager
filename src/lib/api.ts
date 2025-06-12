@@ -12,6 +12,7 @@ export interface ShopifyCustomer {
   first_name: string;
   last_name: string;
   tags: string;
+  created_at?: string;
 }
 
 export interface CustomerSegment {

@@ -99,6 +99,12 @@ async function handleRules(req, res) {
 async function getCustomerSegments() {
   const segments = [
     {
+      id: 'all',
+      name: 'All Customers',
+      customerCount: await getAllCustomerCount(),
+      lastSync: new Date().toISOString()
+    },
+    {
       id: 'vip',
       name: 'VIP Customers',
       customerCount: await getCustomerCountByTag('VIP'),
@@ -130,7 +136,7 @@ async function getCustomerSegments() {
 async function getCustomerCountByTag(tag) {
   try {
     const response = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=${encodeURIComponent(tag)}&limit=1`,
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/count.json?tags=${encodeURIComponent(tag)}`,
       {
         headers: {
           'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
@@ -142,7 +148,7 @@ async function getCustomerCountByTag(tag) {
     if (!response.ok) return 0;
     
     const data = await response.json();
-    return data.customers?.length || 0;
+    return data.count || 0;
   } catch (error) {
     console.error(`Error getting customer count for tag ${tag}:`, error);
     return 0;
@@ -155,7 +161,7 @@ async function getNewCustomerCount() {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
     const response = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?created_at_min=${thirtyDaysAgo.toISOString()}&limit=250`,
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/count.json?created_at_min=${thirtyDaysAgo.toISOString()}`,
       {
         headers: {
           'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
@@ -167,9 +173,31 @@ async function getNewCustomerCount() {
     if (!response.ok) return 0;
     
     const data = await response.json();
-    return data.customers?.length || 0;
+    return data.count || 0;
   } catch (error) {
     console.error('Error getting new customer count:', error);
+    return 0;
+  }
+}
+
+async function getAllCustomerCount() {
+  try {
+    const response = await fetch(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/count.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) return 0;
+    
+    const data = await response.json();
+    return data.count || 0;
+  } catch (error) {
+    console.error('Error getting total customer count:', error);
     return 0;
   }
 }
@@ -183,6 +211,9 @@ async function getCustomersBySegment(segmentName) {
   let endpoint = '';
   
   switch (segmentName) {
+    case 'All Customers':
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=250`;
+      break;
     case 'VIP Customers':
       endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VIP&limit=250`;
       break;
