@@ -106,27 +106,31 @@ app.get('*', (req, res) => {
 // API Handler Functions
 async function handleSegments(req, res) {
   try {
+    console.log('=== SEGMENTS API CALLED ===');
     const segments = await getCustomerSegments();
+    console.log(`Returning ${segments.length} segments to frontend`);
     res.json(segments);
   } catch (error) {
     console.error('Error fetching segments:', error);
-    res.status(500).json({ error: 'Failed to fetch segments' });
+    res.status(500).json({ error: 'Failed to fetch segments', details: error.message });
   }
 }
 
 async function handleCustomers(req, res) {
   try {
     const segmentName = req.query.segment;
+    console.log(`=== CUSTOMERS API CALLED for segment: ${segmentName} ===`);
     
     if (!segmentName) {
       return res.status(400).json({ error: 'Segment parameter is required' });
     }
     
     const customers = await getCustomersBySegment(segmentName);
+    console.log(`Returning ${customers.length} customers for segment: ${segmentName}`);
     res.json(customers);
   } catch (error) {
     console.error('Error fetching customers:', error);
-    res.status(500).json({ error: 'Failed to fetch customers' });
+    res.status(500).json({ error: 'Failed to fetch customers', details: error.message });
   }
 }
 
@@ -483,6 +487,8 @@ async function getCustomersBySegment(segmentName) {
 // Get customers from a real Shopify segment using GraphQL
 async function getCustomersFromShopifySegment(segmentId) {
   try {
+    console.log(`Fetching customers for Shopify segment: ${segmentId}`);
+    
     const query = `
       query getSegmentMembers($segmentId: ID!, $first: Int!) {
         customerSegmentMembers(segmentId: $segmentId, first: $first) {
@@ -491,16 +497,24 @@ async function getCustomersFromShopifySegment(segmentId) {
               id
               firstName
               lastName
-              email
-              createdAt
-              updatedAt
-              tags
-              ordersCount
-              lifetimeDuration
-              addresses {
+              displayName
+              defaultEmailAddress {
+                emailAddress
+              }
+              numberOfOrders
+              amountSpent {
+                amount
+                currencyCode
+              }
+              defaultAddress {
                 city
                 country
+                address1
+                address2
+                province
+                zip
               }
+              note
             }
           }
           pageInfo {
@@ -526,35 +540,43 @@ async function getCustomersFromShopifySegment(segmentId) {
       }
     );
 
+    console.log(`GraphQL response status for segment ${segmentId}:`, response.status);
+
     if (!response.ok) {
-      console.error(`Failed to get customers for segment ${segmentId}`);
+      const errorText = await response.text();
+      console.error(`Failed to get customers for segment ${segmentId}:`, errorText);
       return [];
     }
 
     const data = await response.json();
+    console.log(`GraphQL response for segment ${segmentId}:`, JSON.stringify(data, null, 2));
     
     if (data.errors) {
-      console.error('GraphQL errors:', data.errors);
+      console.error('GraphQL errors for segment members:', data.errors);
       return [];
     }
 
     const customers = data.data?.customerSegmentMembers?.edges?.map(edge => {
       const customer = edge.node;
+      console.log(`Processing customer:`, customer);
+      
       return {
         id: customer.id.split('/').pop(), // Extract numeric ID
-        first_name: customer.firstName,
-        last_name: customer.lastName,
-        email: customer.email,
-        created_at: customer.createdAt,
-        updated_at: customer.updatedAt,
-        tags: customer.tags?.join(', ') || '',
-        orders_count: customer.ordersCount || 0,
-        total_spent: '0.00', // Would need additional query to get this
-        addresses: customer.addresses || []
+        first_name: customer.firstName || '',
+        last_name: customer.lastName || '',
+        email: customer.defaultEmailAddress?.emailAddress || '',
+        created_at: new Date().toISOString(), // CustomerSegmentMember doesn't have creation date
+        updated_at: new Date().toISOString(),
+        tags: '', // CustomerSegmentMember doesn't have tags directly
+        orders_count: customer.numberOfOrders || 0,
+        total_spent: customer.amountSpent?.amount || '0.00',
+        addresses: customer.defaultAddress ? [customer.defaultAddress] : [],
+        display_name: customer.displayName || `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+        note: customer.note || ''
       };
     }) || [];
 
-    console.log(`Retrieved ${customers.length} customers from Shopify segment ${segmentId}`);
+    console.log(`Successfully retrieved ${customers.length} customers from Shopify segment ${segmentId}`);
     return customers;
 
   } catch (error) {
