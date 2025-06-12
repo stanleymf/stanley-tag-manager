@@ -359,7 +359,7 @@ async function getCustomerSegments() {
         },
         body: JSON.stringify({
           query,
-          variables: { first: 100 }
+          variables: { first: 300 }
         })
       }
     );
