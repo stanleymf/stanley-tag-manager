@@ -33,7 +33,69 @@ app.post('/api/rules', handleRules);
 
 // Health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    shopifyConfigured: !!(process.env.SHOPIFY_STORE_URL && process.env.SHOPIFY_ACCESS_TOKEN),
+    storeUrl: process.env.SHOPIFY_STORE_URL ? 'configured' : 'missing',
+    accessToken: process.env.SHOPIFY_ACCESS_TOKEN ? 'configured' : 'missing'
+  });
+});
+
+// Debug endpoint to test Shopify connection
+app.get('/api/debug/shopify', async (req, res) => {
+  try {
+    console.log('Testing Shopify connection...');
+    console.log('Store URL:', process.env.SHOPIFY_STORE_URL);
+    console.log('Access Token configured:', !!process.env.SHOPIFY_ACCESS_TOKEN);
+    
+    if (!process.env.SHOPIFY_STORE_URL || !process.env.SHOPIFY_ACCESS_TOKEN) {
+      return res.status(500).json({
+        error: 'Missing Shopify configuration',
+        storeUrl: !!process.env.SHOPIFY_STORE_URL,
+        accessToken: !!process.env.SHOPIFY_ACCESS_TOKEN
+      });
+    }
+
+    // Test basic Shopify API call
+    const response = await fetch(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/shop.json`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    console.log('Shopify API response status:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log('Shopify API error:', errorText);
+      return res.status(500).json({
+        error: 'Shopify API error',
+        status: response.status,
+        details: errorText
+      });
+    }
+
+    const shopData = await response.json();
+    console.log('Shop name:', shopData.shop?.name);
+
+    res.json({
+      success: true,
+      shopName: shopData.shop?.name,
+      shopDomain: shopData.shop?.domain,
+      apiStatus: 'connected'
+    });
+  } catch (error) {
+    console.error('Shopify debug error:', error);
+    res.status(500).json({
+      error: 'Connection failed',
+      details: error.message
+    });
+  }
 });
 
 // Serve React app for all other routes
@@ -97,6 +159,17 @@ async function handleRules(req, res) {
 
 // Shopify API Functions
 async function getCustomerSegments() {
+  console.log('Getting customer segments...');
+  
+  // Check environment variables first
+  if (!process.env.SHOPIFY_STORE_URL || !process.env.SHOPIFY_ACCESS_TOKEN) {
+    console.error('Missing Shopify configuration in getCustomerSegments');
+    throw new Error('Shopify configuration missing');
+  }
+
+  console.log('Store URL:', process.env.SHOPIFY_STORE_URL);
+  console.log('Access Token configured:', !!process.env.SHOPIFY_ACCESS_TOKEN);
+
   const segments = [
     {
       id: 'all',
@@ -130,24 +203,33 @@ async function getCustomerSegments() {
     }
   ];
   
+  console.log('Generated segments:', segments.map(s => `${s.name}: ${s.customerCount}`));
   return segments;
 }
 
 async function getCustomerCountByTag(tag) {
   try {
-    const response = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/count.json?tags=${encodeURIComponent(tag)}`,
-      {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    console.log(`Getting customer count for tag: ${tag}`);
+    const url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/count.json?tags=${encodeURIComponent(tag)}`;
+    console.log('API URL:', url);
+    
+    const response = await fetch(url, {
+      headers: {
+        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+        'Content-Type': 'application/json',
+      },
+    });
 
-    if (!response.ok) return 0;
+    console.log(`Response status for tag ${tag}:`, response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Shopify API error for tag ${tag}:`, errorText);
+      return 0;
+    }
     
     const data = await response.json();
+    console.log(`Count for tag ${tag}:`, data.count);
     return data.count || 0;
   } catch (error) {
     console.error(`Error getting customer count for tag ${tag}:`, error);
@@ -182,19 +264,27 @@ async function getNewCustomerCount() {
 
 async function getAllCustomerCount() {
   try {
-    const response = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/count.json`,
-      {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    console.log('Getting total customer count...');
+    const url = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/count.json`;
+    console.log('API URL:', url);
+    
+    const response = await fetch(url, {
+      headers: {
+        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+        'Content-Type': 'application/json',
+      },
+    });
 
-    if (!response.ok) return 0;
+    console.log('Response status for total customers:', response.status);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Shopify API error for total customers:', errorText);
+      return 0;
+    }
     
     const data = await response.json();
+    console.log('Total customer count:', data.count);
     return data.count || 0;
   } catch (error) {
     console.error('Error getting total customer count:', error);
