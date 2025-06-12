@@ -25,8 +25,14 @@ app.use(express.json());
 // Serve static files from dist directory
 app.use(express.static(path.join(__dirname, '../dist/client')));
 
+// Cache for segments
+let segmentsCache = null;
+let cacheTimestamp = null;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
 // API Routes
 app.get('/api/segments', handleSegments);
+app.post('/api/segments/sync', handleSegmentsSync);
 app.get('/api/customers', handleCustomers);
 app.post('/api/bulk-tag', handleBulkTag);
 app.post('/api/rules', handleRules);
@@ -107,12 +113,58 @@ app.get('*', (req, res) => {
 async function handleSegments(req, res) {
   try {
     console.log('=== SEGMENTS API CALLED ===');
+    
+    // Check if we have cached segments and they're still fresh
+    const now = Date.now();
+    if (segmentsCache && cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION)) {
+      console.log('Returning cached segments');
+      return res.json(segmentsCache);
+    }
+    
+    // Fetch fresh segments
     const segments = await getCustomerSegments();
-    console.log(`Returning ${segments.length} segments to frontend`);
+    
+    // Update cache
+    segmentsCache = segments;
+    cacheTimestamp = now;
+    
+    console.log(`Returning ${segments.length} fresh segments to frontend`);
     res.json(segments);
   } catch (error) {
     console.error('Error fetching segments:', error);
     res.status(500).json({ error: 'Failed to fetch segments', details: error.message });
+  }
+}
+
+async function handleSegmentsSync(req, res) {
+  try {
+    console.log('=== SEGMENTS SYNC API CALLED ===');
+    
+    // Clear cache to force fresh fetch
+    segmentsCache = null;
+    cacheTimestamp = null;
+    
+    // Fetch fresh segments from Shopify
+    const segments = await getCustomerSegments();
+    
+    // Update cache
+    segmentsCache = segments;
+    cacheTimestamp = Date.now();
+    
+    console.log(`Synced ${segments.length} segments from Shopify`);
+    res.json({ 
+      success: true, 
+      message: `Successfully synced ${segments.length} segments from Shopify`,
+      segments: segments,
+      syncedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error syncing segments:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to sync segments from Shopify', 
+      details: error.message 
+    });
   }
 }
 

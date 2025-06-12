@@ -102,8 +102,20 @@ class ApiService {
 
   // Sync all segments (refresh data)
   async syncSegments(): Promise<CustomerSegment[]> {
-    // This is the same as getSegments since we fetch fresh data each time
-    return this.getSegments();
+    const result = await this.request<{
+      success: boolean;
+      message: string;
+      segments: CustomerSegment[];
+      syncedAt: string;
+    }>('/segments/sync', {
+      method: 'POST',
+    });
+    
+    if (!result.success) {
+      throw new Error(result.message || 'Failed to sync segments');
+    }
+    
+    return result.segments;
   }
 }
 

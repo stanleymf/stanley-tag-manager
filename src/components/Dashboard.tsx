@@ -44,7 +44,19 @@ export function Dashboard() {
   }, []);
 
   const handleRefresh = async () => {
-    await loadSegments(true);
+    try {
+      setIsRefreshing(true);
+      setError(null);
+      
+      // Use the sync API to force refresh from Shopify
+      const data = await apiService.syncSegments();
+      setSegments(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sync segments');
+      console.error('Error syncing segments:', err);
+    } finally {
+      setIsRefreshing(false);
+    }
   };
 
   const formatDate = (dateString: string) => {
