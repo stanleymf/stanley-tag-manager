@@ -258,7 +258,7 @@ async function getCustomerSegments() {
         },
         body: JSON.stringify({
           query,
-          variables: { first: 50 }
+          variables: { first: 100 }
         })
       }
     );
@@ -283,6 +283,16 @@ async function getCustomerSegments() {
 
     const shopifySegments = data.data?.segments?.edges || [];
     console.log(`Found ${shopifySegments.length} Shopify segments`);
+    
+    // Debug: Log all segment names
+    console.log('Segment names from Shopify:');
+    shopifySegments.forEach((edge, index) => {
+      console.log(`${index + 1}. ${edge.node.name} (ID: ${edge.node.id})`);
+    });
+    
+    // Check for pagination
+    const hasNextPage = data.data?.segments?.pageInfo?.hasNextPage || false;
+    console.log('Has more segments (next page):', hasNextPage);
 
     // Convert Shopify segments to our format and get customer counts
     const segments = await Promise.all(
