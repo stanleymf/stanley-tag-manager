@@ -31,10 +31,32 @@ let segmentsCache = null;
 let cacheTimestamp = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-// Authentication configuration
+// Environment variable validation
+const requiredEnvVars = {
+  SHOPIFY_STORE_URL: process.env.SHOPIFY_STORE_URL,
+  SHOPIFY_ACCESS_TOKEN: process.env.SHOPIFY_ACCESS_TOKEN,
+};
+
+// Check for missing critical environment variables
+const missingVars = Object.entries(requiredEnvVars)
+  .filter(([key, value]) => !value)
+  .map(([key]) => key);
+
+if (missingVars.length > 0) {
+  console.warn('⚠️  Missing environment variables:', missingVars.join(', '));
+  console.warn('   App may not function properly without these variables');
+}
+
+// Authentication configuration with fallbacks
 const AUTH_USERNAME = process.env.AUTH_USERNAME || 'admin';
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'windflower2024';
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Log configuration status (without sensitive values)
+console.log('🔧 Configuration Status:');
+console.log(`   Authentication: ${AUTH_USERNAME ? '✅ Configured' : '❌ Missing'}`);
+console.log(`   Shopify Store: ${process.env.SHOPIFY_STORE_URL ? '✅ Configured' : '❌ Missing'}`);
+console.log(`   Shopify Token: ${process.env.SHOPIFY_ACCESS_TOKEN ? '✅ Configured' : '❌ Missing'}`);
 
 // Simple session store (in production, use Redis or proper session store)
 const sessions = new Map();
@@ -97,15 +119,34 @@ app.get('/api/customers', requireAuth, handleCustomers);
 app.post('/api/bulk-tag', requireAuth, handleBulkTag);
 app.post('/api/rules', requireAuth, handleRules);
 
-// Health check
+// Health check with configuration status
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  const config = {
+    status: 'ok',
     timestamp: new Date().toISOString(),
-    shopifyConfigured: !!(process.env.SHOPIFY_STORE_URL && process.env.SHOPIFY_ACCESS_TOKEN),
-    storeUrl: process.env.SHOPIFY_STORE_URL ? 'configured' : 'missing',
-    accessToken: process.env.SHOPIFY_ACCESS_TOKEN ? 'configured' : 'missing'
-  });
+    version: process.env.npm_package_version || '1.0.0',
+    environment: process.env.NODE_ENV || 'production',
+    configuration: {
+      shopifyConfigured: !!(process.env.SHOPIFY_STORE_URL && process.env.SHOPIFY_ACCESS_TOKEN),
+      authConfigured: !!(AUTH_USERNAME && AUTH_PASSWORD),
+      storeUrl: process.env.SHOPIFY_STORE_URL ? 'configured' : 'missing',
+      accessToken: process.env.SHOPIFY_ACCESS_TOKEN ? 'configured' : 'missing',
+      authUsername: AUTH_USERNAME ? 'configured' : 'missing',
+      sessionSecret: SESSION_SECRET ? 'configured' : 'missing'
+    }
+  };
+
+  // Add warnings for missing configuration
+  const warnings = [];
+  if (!process.env.SHOPIFY_STORE_URL) warnings.push('SHOPIFY_STORE_URL missing');
+  if (!process.env.SHOPIFY_ACCESS_TOKEN) warnings.push('SHOPIFY_ACCESS_TOKEN missing');
+  
+  if (warnings.length > 0) {
+    config.warnings = warnings;
+    config.status = 'degraded';
+  }
+
+  res.json(config);
 });
 
 // Debug endpoint to test Shopify connection
