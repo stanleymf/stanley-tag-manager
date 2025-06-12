@@ -545,10 +545,20 @@ async function getCustomerSegments() {
     console.log('Has more segments (next page):', hasNextPage);
 
     // Convert Shopify segments to our format and get customer counts
+    console.log('Processing segments and getting customer counts...');
     const segments = await Promise.all(
       shopifySegments.map(async (edge) => {
         const segment = edge.node;
-        const customerCount = await getSegmentCustomerCount(segment.id);
+        let customerCount = 0;
+        
+        try {
+          console.log(`Getting count for segment: ${segment.name}`);
+          customerCount = await getSegmentCustomerCount(segment.id);
+          console.log(`✅ ${segment.name}: ${customerCount} customers`);
+        } catch (error) {
+          console.error(`❌ Failed to get count for ${segment.name}:`, error.message);
+          customerCount = 0; // Default to 0 if count fails
+        }
         
         return {
           id: segment.id,
@@ -562,6 +572,8 @@ async function getCustomerSegments() {
         };
       })
     );
+    
+    console.log(`✅ Successfully processed ${segments.length} segments`);
 
     // Add "All Customers" as the first segment if not present
     const hasAllCustomers = segments.some(s => s.name.toLowerCase().includes('all'));
@@ -664,18 +676,25 @@ async function getSegmentCustomerCount(segmentId) {
     );
 
     if (!response.ok) {
-      console.log(`Failed to get count for segment ${segmentId}`);
+      const errorText = await response.text();
+      console.error(`❌ HTTP ${response.status} for segment ${segmentId}:`, errorText.substring(0, 200));
       return 0;
     }
 
     const data = await response.json();
+    
+    if (data.errors) {
+      console.error(`❌ GraphQL errors for segment ${segmentId}:`, data.errors);
+      return 0;
+    }
+    
     const totalCount = data.data?.customerSegmentMembers?.totalCount || 0;
-    console.log(`Segment ${segmentId} has ${totalCount} customers`);
+    console.log(`  📊 Segment ${segmentId}: ${totalCount} customers`);
     return totalCount;
 
   } catch (error) {
-    console.error(`Error getting segment customer count for ${segmentId}:`, error);
-    return 0;
+    console.error(`❌ Exception getting count for segment ${segmentId}:`, error.message);
+    throw error; // Re-throw so the calling function can handle it
   }
 }
 
