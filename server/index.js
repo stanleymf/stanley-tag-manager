@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import * as db from './database.js';
 
 dotenv.config();
 
@@ -26,7 +27,7 @@ app.use(express.json());
 // Serve static files from dist directory
 app.use(express.static(path.join(__dirname, '../dist/client')));
 
-// Cache for segments
+// Cache for segments (fallback when database is not available)
 let segmentsCache = null;
 let cacheTimestamp = null;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
@@ -58,7 +59,28 @@ console.log(`   Authentication: ${AUTH_USERNAME ? '✅ Configured' : '❌ Missin
 console.log(`   Shopify Store: ${process.env.SHOPIFY_STORE_URL ? '✅ Configured' : '❌ Missing'}`);
 console.log(`   Shopify Token: ${process.env.SHOPIFY_ACCESS_TOKEN ? '✅ Configured' : '❌ Missing'}`);
 
-// Simple session store (in production, use Redis or proper session store)
+// Initialize database connection
+let dbInitialized = false;
+async function initDB() {
+  try {
+    await db.initializeDatabase();
+    dbInitialized = true;
+    
+    // Clean up expired data on startup
+    await db.cleanupExpiredData();
+    
+    // Set up periodic cleanup (every hour)
+    setInterval(async () => {
+      await db.cleanupExpiredData();
+    }, 60 * 60 * 1000);
+    
+  } catch (error) {
+    console.warn('⚠️  Database initialization failed, using in-memory fallback');
+    dbInitialized = false;
+  }
+}
+
+// Fallback in-memory session store when database is not available
 const sessions = new Map();
 
 // Authentication middleware
@@ -92,12 +114,18 @@ function requireAuth(req, res, next) {
 }
 
 // Login endpoint
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   
   if (username === AUTH_USERNAME && password === AUTH_PASSWORD) {
     const sessionId = crypto.randomBytes(32).toString('hex');
-    sessions.set(sessionId, { username, createdAt: Date.now() });
+    
+    // Save session to database if available, otherwise use memory
+    if (dbInitialized) {
+      await db.saveSession(sessionId, username);
+    } else {
+      sessions.set(sessionId, { username, createdAt: Date.now() });
+    }
     
     res.json({ 
       success: true, 
@@ -117,10 +145,14 @@ app.get('/api/segments', requireAuth, handleSegments);
 app.post('/api/segments/sync', requireAuth, handleSegmentsSync);
 app.get('/api/customers', requireAuth, handleCustomers);
 app.post('/api/bulk-tag', requireAuth, handleBulkTag);
-app.post('/api/rules', requireAuth, handleRules);
+app.get('/api/rules', requireAuth, handleGetRules);
+app.post('/api/rules', requireAuth, handleCreateRule);
+app.put('/api/rules/:id', requireAuth, handleUpdateRule);
+app.delete('/api/rules/:id', requireAuth, handleDeleteRule);
+app.post('/api/rules/:id/execute', requireAuth, handleExecuteRule);
 
 // Health check with configuration status
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   const config = {
     status: 'ok',
     timestamp: new Date().toISOString(),
@@ -129,10 +161,13 @@ app.get('/api/health', (req, res) => {
     configuration: {
       shopifyConfigured: !!(process.env.SHOPIFY_STORE_URL && process.env.SHOPIFY_ACCESS_TOKEN),
       authConfigured: !!(AUTH_USERNAME && AUTH_PASSWORD),
+      databaseConfigured: !!process.env.DATABASE_URL,
+      databaseConnected: dbInitialized && await db.isDatabaseConnected(),
       storeUrl: process.env.SHOPIFY_STORE_URL ? 'configured' : 'missing',
       accessToken: process.env.SHOPIFY_ACCESS_TOKEN ? 'configured' : 'missing',
       authUsername: AUTH_USERNAME ? 'configured' : 'missing',
-      sessionSecret: SESSION_SECRET ? 'configured' : 'missing'
+      sessionSecret: SESSION_SECRET ? 'configured' : 'missing',
+      databaseUrl: process.env.DATABASE_URL ? 'configured' : 'missing'
     }
   };
 
@@ -140,6 +175,7 @@ app.get('/api/health', (req, res) => {
   const warnings = [];
   if (!process.env.SHOPIFY_STORE_URL) warnings.push('SHOPIFY_STORE_URL missing');
   if (!process.env.SHOPIFY_ACCESS_TOKEN) warnings.push('SHOPIFY_ACCESS_TOKEN missing');
+  if (!process.env.DATABASE_URL) warnings.push('DATABASE_URL missing - using in-memory storage');
   
   if (warnings.length > 0) {
     config.warnings = warnings;
@@ -358,20 +394,32 @@ app.get('*', (req, res) => {
 async function handleSegments(req, res) {
   try {
     console.log('=== SEGMENTS API CALLED ===');
+    const cacheKey = 'customer_segments';
     
-    // Check if we have cached segments and they're still fresh
-    const now = Date.now();
-    if (segmentsCache && cacheTimestamp && (now - cacheTimestamp < CACHE_DURATION)) {
-      console.log('Returning cached segments');
-      return res.json(segmentsCache);
+    // Check database cache first, then fallback to memory cache
+    let cachedSegments = null;
+    if (dbInitialized) {
+      cachedSegments = await db.getCache(cacheKey);
+    } else if (segmentsCache && cacheTimestamp && (Date.now() - cacheTimestamp < CACHE_DURATION)) {
+      cachedSegments = segmentsCache;
+    }
+    
+    if (cachedSegments) {
+      console.log('📦 Returning cached segments');
+      return res.json(cachedSegments);
     }
     
     // Fetch fresh segments
+    console.log('🔄 Fetching fresh segments from Shopify...');
     const segments = await getCustomerSegments();
     
-    // Update cache
-    segmentsCache = segments;
-    cacheTimestamp = now;
+    // Update cache (database preferred, memory fallback)
+    if (dbInitialized) {
+      await db.setCache(cacheKey, segments, 5);
+    } else {
+      segmentsCache = segments;
+      cacheTimestamp = Date.now();
+    }
     
     console.log(`Returning ${segments.length} fresh segments to frontend`);
     res.json(segments);
@@ -447,14 +495,98 @@ async function handleBulkTag(req, res) {
   }
 }
 
-async function handleRules(req, res) {
+// Rule management handlers
+async function handleGetRules(req, res) {
   try {
-    const rule = req.body;
+    console.log('=== GET RULES API CALLED ===');
+    const rules = await db.getTaggingRules();
+    console.log(`Returning ${rules.length} tagging rules`);
+    res.json(rules);
+  } catch (error) {
+    console.error('Error getting rules:', error);
+    res.status(500).json({ error: 'Failed to get rules', details: error.message });
+  }
+}
+
+async function handleCreateRule(req, res) {
+  try {
+    console.log('=== CREATE RULE API CALLED ===');
+    const ruleData = req.body;
+    
+    // Generate ID if not provided
+    if (!ruleData.id) {
+      ruleData.id = `rule-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    }
+    
+    // Set creation timestamp
+    if (!ruleData.createdAt) {
+      ruleData.createdAt = new Date().toISOString();
+    }
+    
+    const savedRule = await db.saveTaggingRule(ruleData);
+    console.log(`Created rule: ${savedRule.name}`);
+    res.json(savedRule);
+  } catch (error) {
+    console.error('Error creating rule:', error);
+    res.status(500).json({ error: 'Failed to create rule', details: error.message });
+  }
+}
+
+async function handleUpdateRule(req, res) {
+  try {
+    console.log('=== UPDATE RULE API CALLED ===');
+    const ruleId = req.params.id;
+    const ruleData = { ...req.body, id: ruleId };
+    
+    const savedRule = await db.saveTaggingRule(ruleData);
+    console.log(`Updated rule: ${savedRule.name}`);
+    res.json(savedRule);
+  } catch (error) {
+    console.error('Error updating rule:', error);
+    res.status(500).json({ error: 'Failed to update rule', details: error.message });
+  }
+}
+
+async function handleDeleteRule(req, res) {
+  try {
+    console.log('=== DELETE RULE API CALLED ===');
+    const ruleId = req.params.id;
+    
+    const deleted = await db.deleteTaggingRule(ruleId);
+    if (deleted) {
+      console.log(`Deleted rule: ${ruleId}`);
+      res.json({ success: true, message: 'Rule deleted successfully' });
+    } else {
+      res.status(404).json({ error: 'Rule not found' });
+    }
+  } catch (error) {
+    console.error('Error deleting rule:', error);
+    res.status(500).json({ error: 'Failed to delete rule', details: error.message });
+  }
+}
+
+async function handleExecuteRule(req, res) {
+  try {
+    console.log('=== EXECUTE RULE API CALLED ===');
+    const ruleId = req.params.id;
+    
+    // Get the rule from database
+    const rules = await db.getTaggingRules();
+    const rule = rules.find(r => r.id === ruleId);
+    
+    if (!rule) {
+      return res.status(404).json({ error: 'Rule not found' });
+    }
+    
+    if (!rule.isActive) {
+      return res.status(400).json({ error: 'Rule is not active' });
+    }
+    
     const result = await executeTaggingRule(rule);
     res.json(result);
   } catch (error) {
     console.error('Error executing rule:', error);
-    res.status(500).json({ error: 'Failed to execute rule' });
+    res.status(500).json({ error: 'Failed to execute rule', details: error.message });
   }
 }
 
@@ -1046,11 +1178,37 @@ async function executeTaggingRule(rule) {
   }
 }
 
-// Start server
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Stanley Tag Manager running on port ${PORT}`);
-  console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`🏪 Shopify Store: ${process.env.SHOPIFY_STORE_URL || 'Not configured'}`);
-});
+// Initialize and start server
+async function startServer() {
+  try {
+    // Initialize database
+    await initDB();
+    
+    // Start the server
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Stanley Tag Manager running on port ${PORT}`);
+      console.log(`📊 Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`🏪 Shopify Store: ${process.env.SHOPIFY_STORE_URL || 'Not configured'}`);
+      console.log(`💾 Database: ${dbInitialized ? '✅ Connected' : '⚠️  In-memory fallback'}`);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+// Graceful shutdown
+async function gracefulShutdown() {
+  console.log('🛑 Shutting down gracefully...');
+  await db.closeDatabase();
+  process.exit(0);
+}
+
+// Handle shutdown signals
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+// Start the server
+startServer();
 
 export default app; 
