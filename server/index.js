@@ -289,7 +289,7 @@ app.get('/api/debug/graphql', async (req, res) => {
         },
         body: JSON.stringify({
           query,
-          variables: { first: 300 } // Use same limit as main query
+          variables: { first: 250 } // Shopify GraphQL maximum limit
         })
       }
     );
@@ -444,7 +444,7 @@ async function handleSegmentsSync(req, res) {
     }
     
     // Fetch fresh segments from Shopify
-    console.log('🔄 Fetching fresh segments with pagination limit: 300');
+    console.log('🔄 Fetching fresh segments with pagination limit: 250 (Shopify maximum)');
     const segments = await getCustomerSegments();
     
     // Update both caches with fresh data
@@ -458,10 +458,10 @@ async function handleSegmentsSync(req, res) {
     console.log(`✅ Synced ${segments.length} segments from Shopify (up from previous limit)`);
     res.json({ 
       success: true, 
-      message: `Successfully synced ${segments.length} segments from Shopify with increased pagination`,
+      message: `Successfully synced ${segments.length} segments from Shopify (max 250 limit)`,
       segments: segments,
       syncedAt: new Date().toISOString(),
-      paginationLimit: 300
+      paginationLimit: 250
     });
   } catch (error) {
     console.error('Error syncing segments:', error);
@@ -651,7 +651,7 @@ async function getCustomerSegments() {
         },
         body: JSON.stringify({
           query,
-          variables: { first: 300 }
+          variables: { first: 250 } // Shopify GraphQL maximum limit
         })
       }
     );
@@ -1010,7 +1010,7 @@ async function getCustomersFromShopifySegment(segmentId) {
         },
         body: JSON.stringify({
           query,
-          variables: { segmentId, first: 300 }
+          variables: { segmentId, first: 250 } // Shopify GraphQL maximum limit
         })
       }
     );
