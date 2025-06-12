@@ -20,6 +20,10 @@ export interface CustomerSegment {
   name: string;
   customerCount: number;
   lastSync: string;
+  criteria?: string;
+  description?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface TaggingRule {

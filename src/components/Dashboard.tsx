@@ -159,23 +159,39 @@ export function Dashboard() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="font-medium text-gray-700">Segment Name</TableHead>
+                  <TableHead className="font-medium text-gray-700">Criteria</TableHead>
                   <TableHead className="font-medium text-gray-700">Customer Count</TableHead>
                   <TableHead className="font-medium text-gray-700">Last Sync</TableHead>
-                  <TableHead className="font-medium text-gray-700">Status</TableHead>
                   <TableHead className="font-medium text-gray-700">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {segments.map((segment) => (
                   <TableRow key={segment.id} className="hover:bg-gray-50">
-                    <TableCell className="font-medium text-gray-900">{segment.name}</TableCell>
-                    <TableCell className="text-gray-700">{segment.customerCount.toLocaleString()}</TableCell>
-                    <TableCell className="text-gray-600">{formatDate(segment.lastSync)}</TableCell>
                     <TableCell>
-                      <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">
-                        Synced
-                      </Badge>
+                      <div className="flex flex-col">
+                        <span className="font-medium text-gray-900">{segment.name}</span>
+                        {segment.description && (
+                          <span className="text-xs text-gray-500 mt-1">{segment.description}</span>
+                        )}
+                      </div>
                     </TableCell>
+                    <TableCell>
+                      <div className="max-w-xs">
+                        {segment.criteria ? (
+                          <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700 border-blue-200">
+                            {segment.criteria.length > 50 
+                              ? `${segment.criteria.substring(0, 50)}...` 
+                              : segment.criteria
+                            }
+                          </Badge>
+                        ) : (
+                          <span className="text-gray-400 text-sm">No criteria</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-gray-700 font-medium">{segment.customerCount.toLocaleString()}</TableCell>
+                    <TableCell className="text-gray-600">{formatDate(segment.lastSync)}</TableCell>
                     <TableCell>
                       <Button
                         onClick={() => handleViewCustomers(segment)}
