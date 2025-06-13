@@ -650,11 +650,14 @@ app.get('/api/test/segment-members', requireAuth, async (req, res) => {
           edges {
             node {
               id
-              firstName
-              lastName
-              email
-              numberOfOrders
-              tags
+              customer {
+                id
+                firstName
+                lastName
+                email
+                numberOfOrders
+                tags
+              }
             }
           }
           pageInfo {
@@ -695,7 +698,7 @@ app.get('/api/test/segment-members', requireAuth, async (req, res) => {
     const data = await response.json();
     console.log('GraphQL response:', JSON.stringify(data, null, 2));
     
-    const customers = data.data?.customerSegmentMembers?.edges?.map(edge => edge.node) || [];
+    const customers = data.data?.customerSegmentMembers?.edges?.map(edge => edge.node.customer) || [];
     
     res.json({
       success: true,
@@ -1307,27 +1310,30 @@ async function getCustomersFromShopifySegment(segmentId) {
             edges {
               node {
                 id
-                firstName
-                lastName
-                email
-                phone
-                numberOfOrders
-                tags
-                createdAt
-                updatedAt
-                addresses {
+                customer {
                   id
                   firstName
                   lastName
-                  address1
-                  address2
-                  city
-                  province
-                  country
-                  zip
+                  email
                   phone
+                  numberOfOrders
+                  tags
+                  createdAt
+                  updatedAt
+                  addresses {
+                    id
+                    firstName
+                    lastName
+                    address1
+                    address2
+                    city
+                    province
+                    country
+                    zip
+                    phone
+                  }
+                  note
                 }
-                note
               }
             }
             pageInfo {
@@ -1386,7 +1392,7 @@ async function getCustomersFromShopifySegment(segmentId) {
       
       // Process customers
       const processedCustomers = edges.map(edge => {
-        const customer = edge.node;
+        const customer = edge.node.customer;
         return {
           id: customer.id.toString().replace('gid://shopify/Customer/', ''),
           first_name: customer.firstName || '',
