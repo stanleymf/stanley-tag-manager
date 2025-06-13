@@ -575,9 +575,14 @@ app.get('/api/test/customers', requireAuth, async (req, res) => {
               email
               numberOfOrders
               tags
+              createdAt
+              updatedAt
             }
           }
-          totalCount
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+          }
         }
       }
     `;
@@ -612,12 +617,15 @@ app.get('/api/test/customers', requireAuth, async (req, res) => {
     const data = await response.json();
     console.log('GraphQL response:', JSON.stringify(data, null, 2));
     
+    const customers = data.data?.customers?.edges?.map(edge => edge.node) || [];
+    
     res.json({
       success: true,
       status: response.status,
       data: data,
-      customerCount: data.data?.customers?.totalCount || 0,
-      customers: data.data?.customers?.edges?.map(edge => edge.node) || []
+      customerCount: customers.length,
+      customers: customers,
+      pageInfo: data.data?.customers?.pageInfo
     });
     
   } catch (error) {
