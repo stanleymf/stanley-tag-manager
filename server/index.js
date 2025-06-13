@@ -1891,58 +1891,120 @@ async function getBasicSegments() {
 // Get customer count for a specific Shopify segment
 async function getSegmentCustomerCount(segmentId) {
   try {
-    // Use a different approach - get a small sample and check if there are any customers
-    const query = `
-      query getSegmentCount($segmentId: ID!) {
-        customerSegmentMembers(segmentId: $segmentId, first: 1) {
-          edges {
-            node {
-              id
-            }
-          }
-          pageInfo {
-            hasNextPage
-            hasPreviousPage
-          }
-        }
+    console.log(`🔢 Getting accurate customer count for segment: ${segmentId}`);
+    
+    // Get segment details first
+    const segments = await getCustomerSegments();
+    const segment = segments.find(s => s.id === segmentId);
+    
+    if (!segment) {
+      console.error(`❌ Segment not found: ${segmentId}`);
+      return 0;
+    }
+    
+    console.log(`📋 Segment criteria: ${segment.criteria}`);
+    
+    // Use the same logic as the customer sync function to get accurate counts
+    if (segment.criteria.includes('customer_email_domain')) {
+      const domainMatch = segment.criteria.match(/customer_email_domain = '([^']+)'/);
+      if (domainMatch) {
+        const domain = domainMatch[1];
+        console.log(`🌐 Counting customers with email domain: ${domain}`);
+        
+        // Use pagination to get ALL customers with this domain
+        const allCustomers = await fetchAllCustomersWithPagination(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json`,
+          {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          },
+          { limit: 250 }
+        );
+        
+        const matchingCustomers = allCustomers.filter(customer => 
+          customer.email && customer.email.toLowerCase().includes(`@${domain.toLowerCase()}`)
+        );
+        
+        console.log(`📊 Found ${matchingCustomers.length} customers with domain ${domain}`);
+        return matchingCustomers.length;
       }
-    `;
-
-    const response = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+    } else if (segment.criteria.includes('customer_tags')) {
+      const tagsMatch = segment.criteria.match(/customer_tags = '([^']+)'/);
+      if (tagsMatch) {
+        const tags = tagsMatch[1];
+        console.log(`🏷️ Counting customers with tags: ${tags}`);
+        
+        // Use pagination to get ALL customers and filter by tags
+        const allCustomers = await fetchAllCustomersWithPagination(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json`,
+          {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          },
+          { limit: 250 }
+        );
+        
+        const targetTags = tags.split(',').map(tag => tag.trim());
+        const matchingCustomers = allCustomers.filter(customer => {
+          const customerTags = customer.tags ? customer.tags.split(',').map(tag => tag.trim()) : [];
+          return targetTags.some(tag => customerTags.includes(tag));
+        });
+        
+        console.log(`📊 Found ${matchingCustomers.length} customers with tags ${tags}`);
+        return matchingCustomers.length;
+      }
+    } else if (segment.criteria.includes('rfm_group')) {
+      const rfmMatch = segment.criteria.match(/rfm_group = '([^']+)'/);
+      if (rfmMatch) {
+        const rfmGroup = rfmMatch[1];
+        console.log(`🏆 Counting customers with RFM group: ${rfmGroup}`);
+        
+        // Use pagination to get ALL customers and calculate RFM groups
+        const allCustomers = await fetchAllCustomersWithPagination(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json`,
+          {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          },
+          { limit: 250 }
+        );
+        
+        const matchingCustomers = allCustomers.filter(customer => {
+          const ordersCount = customer.orders_count || 0;
+          const totalSpent = parseFloat(customer.total_spent || '0');
+          
+          let calculatedRfmGroup = 'AT_RISK';
+          if (ordersCount >= 5 && totalSpent >= 500) {
+            calculatedRfmGroup = 'CHAMPIONS';
+          } else if (ordersCount >= 3 && totalSpent >= 200) {
+            calculatedRfmGroup = 'LOYAL_CUSTOMERS';
+          } else if (ordersCount >= 1 && totalSpent >= 50) {
+            calculatedRfmGroup = 'AT_RISK';
+          } else {
+            calculatedRfmGroup = 'CANT_LOSE';
+          }
+          
+          return calculatedRfmGroup === rfmGroup;
+        });
+        
+        console.log(`📊 Found ${matchingCustomers.length} customers with RFM group ${rfmGroup}`);
+        return matchingCustomers.length;
+      }
+    }
+    
+    // Fallback: get all customers and count them
+    console.log(`🔄 Using fallback approach for segment count`);
+    const allCustomers = await fetchAllCustomersWithPagination(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json`,
       {
-        method: 'POST',
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query,
-          variables: { segmentId }
-        })
-      }
+        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+      },
+      { limit: 250 }
     );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`❌ HTTP ${response.status} for segment count ${segmentId}:`, errorText.substring(0, 200));
-      return 0;
-    }
-
-    const data = await response.json();
     
-    if (data.errors) {
-      console.error(`❌ GraphQL errors for segment count ${segmentId}:`, data.errors);
-      return 0;
-    }
+    const matchingCustomers = allCustomers.filter(customer => {
+      return matchesSegmentCriteria(customer, segment.criteria);
+    });
     
-    // If we get any customers, we know there are customers in this segment
-    // For now, let's use a fallback approach - get all customers and count them
-    const customers = await getCustomersFromShopifySegment(segmentId);
-    const count = customers.length;
-    
-    console.log(`📊 Segment ${segmentId}: ${count} customers (from actual customer fetch)`);
-    return count;
+    console.log(`📊 Segment ${segmentId}: ${matchingCustomers.length} customers (from paginated fetch)`);
+    return matchingCustomers.length;
 
   } catch (error) {
     console.error(`❌ Exception getting count for segment ${segmentId}:`, error.message);
