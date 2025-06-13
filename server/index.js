@@ -638,6 +638,85 @@ app.get('/api/test/customers', requireAuth, async (req, res) => {
   }
 });
 
+// Test endpoint for customerSegmentMembers query
+app.get('/api/test/segment-members', requireAuth, async (req, res) => {
+  try {
+    const segmentId = req.query.segmentId || 'gid://shopify/Segment/527351120096';
+    console.log(`=== TESTING CUSTOMER SEGMENT MEMBERS for segment: ${segmentId} ===`);
+    
+    const query = `
+      query getSegmentMembers($segmentId: ID!) {
+        customerSegmentMembers(segmentId: $segmentId, first: 10) {
+          edges {
+            node {
+              id
+              firstName
+              lastName
+              email
+              numberOfOrders
+              tags
+            }
+          }
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+          }
+        }
+      }
+    `;
+    
+    const response = await fetch(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query,
+          variables: { segmentId }
+        })
+      }
+    );
+    
+    console.log(`GraphQL response status: ${response.status}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('GraphQL error:', errorText);
+      return res.json({
+        success: false,
+        error: `HTTP ${response.status}`,
+        details: errorText.substring(0, 500)
+      });
+    }
+    
+    const data = await response.json();
+    console.log('GraphQL response:', JSON.stringify(data, null, 2));
+    
+    const customers = data.data?.customerSegmentMembers?.edges?.map(edge => edge.node) || [];
+    
+    res.json({
+      success: true,
+      status: response.status,
+      segmentId: segmentId,
+      data: data,
+      customerCount: customers.length,
+      customers: customers,
+      pageInfo: data.data?.customerSegmentMembers?.pageInfo
+    });
+    
+  } catch (error) {
+    console.error('Segment members test error:', error);
+    res.json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // Serve React app for all other routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/client/index.html'));
