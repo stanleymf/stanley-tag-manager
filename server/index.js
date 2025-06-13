@@ -1036,7 +1036,10 @@ async function getSegmentCustomerCount(segmentId) {
     const query = `
       query getSegmentCount($segmentId: ID!) {
         customerSegmentMembers(segmentId: $segmentId, first: 1) {
-          totalCount
+          pageInfo {
+            hasNextPage
+            hasPreviousPage
+          }
         }
       }
     `;
@@ -1069,9 +1072,14 @@ async function getSegmentCustomerCount(segmentId) {
       return 0;
     }
     
-    const totalCount = data.data?.customerSegmentMembers?.totalCount || 0;
-    console.log(`📊 Segment ${segmentId}: ${totalCount} customers`);
-    return totalCount;
+    // Since we can't get totalCount directly, we'll use the count from segments list
+    // This is a workaround - we'll get the count from the segments API instead
+    const segments = await getCustomerSegments();
+    const segment = segments.find(s => s.id === segmentId);
+    const count = segment?.customerCount || 0;
+    
+    console.log(`📊 Segment ${segmentId}: ${count} customers (from segments list)`);
+    return count;
 
   } catch (error) {
     console.error(`❌ Exception getting count for segment ${segmentId}:`, error.message);
