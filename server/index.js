@@ -2008,37 +2008,124 @@ async function getSegmentCustomerCount(segmentId) {
       const rfmMatch = segment.criteria.match(/rfm_group = '([^']+)'/);
       if (rfmMatch) {
         const rfmGroup = rfmMatch[1];
-        console.log(`🏆 Counting customers with RFM group: ${rfmGroup}`);
+        console.log(`🏆 Fetching customers with RFM group: ${rfmGroup}`);
         
-        // Use pagination to get ALL customers and calculate RFM groups
-        const allCustomers = await fetchAllCustomersWithPagination(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json`,
-          {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-          },
-          { limit: 250 }
-        );
-        
-        const matchingCustomers = allCustomers.filter(customer => {
-          const ordersCount = customer.orders_count || 0;
-          const totalSpent = parseFloat(customer.total_spent || '0');
+        // Approach 1: Try direct segment customers endpoint with pagination (most reliable)
+        try {
+          console.log(`🔍 Approach 1: Using direct segment customers endpoint with pagination`);
+          const segmentId = segment.id.replace('gid://shopify/Segment/', '');
           
-          let calculatedRfmGroup = 'AT_RISK';
-          if (ordersCount >= 5 && totalSpent >= 500) {
-            calculatedRfmGroup = 'CHAMPIONS';
-          } else if (ordersCount >= 3 && totalSpent >= 200) {
-            calculatedRfmGroup = 'LOYAL_CUSTOMERS';
-          } else if (ordersCount >= 1 && totalSpent >= 50) {
-            calculatedRfmGroup = 'AT_RISK';
-          } else {
-            calculatedRfmGroup = 'CANT_LOSE';
+          // Use the pagination helper for REST API to get ALL customers
+          const allCustomers = await fetchAllCustomersWithPagination(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customer_segments/${segmentId}/customers.json`,
+            {
+              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            },
+            { limit: 250 }
+          );
+          
+          console.log(`📋 Found ${allCustomers.length} customers via paginated REST segment endpoint`);
+          
+          if (allCustomers.length > 0) {
+            return allCustomers.map(customer => ({
+              id: customer.id.toString(),
+              first_name: customer.first_name || '',
+              last_name: customer.last_name || '',
+              email: customer.email || '',
+              phone: customer.phone || '',
+              created_at: customer.created_at || new Date().toISOString(),
+              updated_at: customer.updated_at || new Date().toISOString(),
+              tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+              orders_count: customer.orders_count || 0,
+              total_spent: customer.total_spent || '0.00',
+              addresses: customer.addresses || [],
+              display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+              note: customer.note || ''
+            }));
           }
-          
-          return calculatedRfmGroup === rfmGroup;
-        });
+        } catch (error) {
+          console.log(`❌ Direct segment endpoint approach failed:`, error.message);
+        }
         
-        console.log(`📊 Found ${matchingCustomers.length} customers with RFM group ${rfmGroup}`);
-        return matchingCustomers.length;
+        // Approach 2: Try GraphQL customerSegmentMembers with pagination
+        try {
+          console.log(`🔍 Approach 2: Using GraphQL customerSegmentMembers with pagination`);
+          const customers = await fetchAllCustomersWithGraphQLPagination(
+            `
+            query getSegmentMembers($segmentId: ID!, $first: Int!, $after: String) {
+              customerSegmentMembers(segmentId: $segmentId, first: $first, after: $after) {
+                edges {
+                  node {
+                    id
+                    customer {
+                      id
+                      firstName
+                      lastName
+                      email
+                      phone
+                      createdAt
+                      updatedAt
+                      tags
+                      ordersCount
+                      totalSpent
+                      addresses {
+                        id
+                        firstName
+                        lastName
+                        company
+                        address1
+                        address2
+                        city
+                        province
+                        country
+                        zip
+                        phone
+                      }
+                      note
+                    }
+                  }
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+              }
+            }
+            `,
+            { segmentId: segment.id, first: 250 }
+          );
+          
+          console.log(`📋 Found ${customers.length} customers via paginated GraphQL customerSegmentMembers`);
+          
+          if (customers.length > 0) {
+            return customers.map(customer => ({
+              id: customer.id.split('/').pop(),
+              first_name: customer.firstName || '',
+              last_name: customer.lastName || '',
+              email: customer.email || '',
+              phone: customer.phone || '',
+              created_at: customer.createdAt || new Date().toISOString(),
+              updated_at: customer.updatedAt || new Date().toISOString(),
+              tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+              orders_count: customer.ordersCount || 0,
+              total_spent: customer.totalSpent || '0.00',
+              addresses: customer.addresses || [],
+              display_name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+              note: customer.note || ''
+            }));
+          }
+        } catch (error) {
+          console.log(`❌ GraphQL customerSegmentMembers approach failed:`, error.message);
+        }
+        
+        // Approach 3: Fallback to RFM calculation (least reliable)
+        console.log(`🔍 Approach 3: Using fallback RFM calculation`);
+        const customers = await fetchCustomersWithRfmGroupFallback(rfmGroup);
+        
+        if (customers.length > 0) {
+          console.log(`📋 Found ${customers.length} customers via RFM calculation fallback`);
+          return customers;
+        }
       }
     }
     
