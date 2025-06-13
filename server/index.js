@@ -1449,44 +1449,106 @@ async function getCustomersFromShopifySegment(segmentId) {
     } else if (segment.criteria.includes('rfm_group')) {
       const rfmMatch = segment.criteria.match(/rfm_group = '([^']+)'/);
       if (rfmMatch) {
-        const requiredRfmGroup = rfmMatch[1];
-        console.log(`🏆 Fetching customers with RFM group: ${requiredRfmGroup}`);
+        const rfmGroup = rfmMatch[1];
+        console.log(`🏆 Fetching customers with RFM group: ${rfmGroup}`);
         
-        // RFM groups are typically stored as customer tags in Shopify
-        const response = await fetch(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=${encodeURIComponent(requiredRfmGroup)}&limit=250`,
-          {
-            headers: {
-              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+        // RFM groups are Shopify's internal segmentation, use GraphQL to fetch
+        const graphqlQuery = `
+          query getCustomersByRfmGroup($rfmGroup: String!, $first: Int!) {
+            customers(first: $first, query: "rfm_group:${rfmGroup}") {
+              edges {
+                node {
+                  id
+                  firstName
+                  lastName
+                  email
+                  phone
+                  createdAt
+                  updatedAt
+                  tags
+                  ordersCount
+                  totalSpent
+                  addresses {
+                    id
+                    firstName
+                    lastName
+                    company
+                    address1
+                    address2
+                    city
+                    province
+                    country
+                    zip
+                    phone
+                  }
+                  note
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
             }
           }
-        );
+        `;
         
-        if (!response.ok) {
-          console.error(`❌ RFM group API error: ${response.status}`);
-          return [];
+        try {
+          const response = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+            {
+              method: 'POST',
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                query: graphqlQuery,
+                variables: {
+                  rfmGroup: rfmGroup,
+                  first: 250
+                }
+              })
+            }
+          );
+          
+          if (!response.ok) {
+            console.error(`❌ GraphQL API error: ${response.status}`);
+            // Fallback to REST API with filtering
+            return await fetchCustomersWithRfmGroupFallback(rfmGroup);
+          }
+          
+          const data = await response.json();
+          
+          if (data.errors) {
+            console.error(`❌ GraphQL errors:`, data.errors);
+            // Fallback to REST API with filtering
+            return await fetchCustomersWithRfmGroupFallback(rfmGroup);
+          }
+          
+          const customers = data.data?.customers?.edges?.map(edge => edge.node) || [];
+          console.log(`📋 Found ${customers.length} customers with RFM group ${rfmGroup} via GraphQL`);
+          
+          return customers.map(customer => ({
+            id: customer.id.split('/').pop(),
+            first_name: customer.firstName || '',
+            last_name: customer.lastName || '',
+            email: customer.email || '',
+            phone: customer.phone || '',
+            created_at: customer.createdAt || new Date().toISOString(),
+            updated_at: customer.updatedAt || new Date().toISOString(),
+            tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+            orders_count: customer.ordersCount || 0,
+            total_spent: customer.totalSpent || '0.00',
+            addresses: customer.addresses || [],
+            display_name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+            note: customer.note || ''
+          }));
+          
+        } catch (error) {
+          console.error(`❌ GraphQL request failed:`, error);
+          // Fallback to REST API with filtering
+          return await fetchCustomersWithRfmGroupFallback(rfmGroup);
         }
-        
-        const data = await response.json();
-        const customers = data.customers || [];
-        
-        console.log(`📋 Found ${customers.length} customers with RFM group ${requiredRfmGroup}`);
-        
-        return customers.map(customer => ({
-          id: customer.id.toString(),
-          first_name: customer.first_name || '',
-          last_name: customer.last_name || '',
-          email: customer.email || '',
-          phone: customer.phone || '',
-          created_at: customer.created_at || new Date().toISOString(),
-          updated_at: customer.updated_at || new Date().toISOString(),
-          tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-          orders_count: customer.orders_count || 0,
-          total_spent: customer.total_spent || '0.00',
-          addresses: customer.addresses || [],
-          display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-          note: customer.note || ''
-        }));
       }
     }
     
@@ -1574,6 +1636,99 @@ async function getCustomersFromShopifySegment(segmentId) {
   }
 }
 
+// Fallback function for RFM groups using REST API with filtering
+async function fetchCustomersWithRfmGroupFallback(rfmGroup) {
+  console.log(`🔄 Using fallback REST API approach for RFM group: ${rfmGroup}`);
+  
+  let allCustomers = [];
+  let page = 1;
+  const limit = 250;
+  let hasMore = true;
+  
+  while (hasMore) {
+    console.log(`📄 Fetching customers page ${page} via REST API for RFM group ${rfmGroup}`);
+    
+    try {
+      const response = await fetch(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=${limit}&page=${page}`,
+        {
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        console.error(`❌ REST API error: ${response.status}`);
+        break;
+      }
+      
+      const data = await response.json();
+      const customers = data.customers || [];
+      
+      console.log(`📋 Retrieved ${customers.length} customers from page ${page}`);
+      
+      if (customers.length === 0) {
+        hasMore = false;
+        break;
+      }
+      
+      // For RFM groups, we need to calculate the RFM score for each customer
+      // This is a simplified approach - in practice, you might need more sophisticated RFM calculation
+      const filteredCustomers = customers.filter(customer => {
+        // For now, we'll use a simple heuristic based on orders and total spent
+        // This is a placeholder - actual RFM calculation would be more complex
+        const orders = customer.orders_count || 0;
+        const totalSpent = parseFloat(customer.total_spent || '0');
+        const lastOrderDate = customer.updated_at;
+        
+        // Simple RFM logic for CHAMPIONS group (high frequency, high monetary value)
+        if (rfmGroup === 'CHAMPIONS') {
+          return orders >= 5 && totalSpent >= 500; // Example criteria for champions
+        }
+        
+        // Add other RFM group logic as needed
+        return false;
+      });
+      
+      console.log(`🔍 Filtered ${filteredCustomers.length} customers matching RFM group ${rfmGroup} from page ${page}`);
+      
+      const processedCustomers = filteredCustomers.map(customer => ({
+        id: customer.id.toString(),
+        first_name: customer.first_name || '',
+        last_name: customer.last_name || '',
+        email: customer.email || '',
+        phone: customer.phone || '',
+        created_at: customer.created_at || new Date().toISOString(),
+        updated_at: customer.updated_at || new Date().toISOString(),
+        tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+        orders_count: customer.orders_count || 0,
+        total_spent: customer.total_spent || '0.00',
+        addresses: customer.addresses || [],
+        display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+        note: customer.note || ''
+      }));
+      
+      allCustomers = allCustomers.concat(processedCustomers);
+      console.log(`✅ Processed ${processedCustomers.length} matching customers (total: ${allCustomers.length})`);
+      
+      if (customers.length < limit) {
+        hasMore = false;
+      } else {
+        page++;
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error fetching page ${page}:`, error.message);
+      break;
+    }
+  }
+  
+  console.log(`🎉 Successfully retrieved ${allCustomers.length} customers matching RFM group ${rfmGroup}`);
+  return allCustomers;
+}
+
 // Helper function to check if a customer matches segment criteria
 function matchesSegmentCriteria(customer, criteria) {
   try {
@@ -1606,9 +1761,28 @@ function matchesSegmentCriteria(customer, criteria) {
       const rfmMatch = criteria.match(/rfm_group = '([^']+)'/);
       if (rfmMatch) {
         const requiredRfmGroup = rfmMatch[1];
-        const customerTags = customer.tags || '';
-        const matches = customerTags.includes(requiredRfmGroup);
-        console.log(`🏆 RFM group check: "${customerTags}" contains "${requiredRfmGroup}" = ${matches}`);
+        
+        // RFM groups are calculated based on customer behavior, not stored as tags
+        // This is a simplified RFM calculation - in practice, this would be more sophisticated
+        const orders = customer.orders_count || 0;
+        const totalSpent = parseFloat(customer.total_spent || '0');
+        
+        let matches = false;
+        if (requiredRfmGroup === 'CHAMPIONS') {
+          // Champions: High frequency, high monetary value customers
+          matches = orders >= 5 && totalSpent >= 500;
+        } else if (requiredRfmGroup === 'LOYAL') {
+          // Loyal: Regular customers with good spending
+          matches = orders >= 3 && totalSpent >= 200;
+        } else if (requiredRfmGroup === 'AT_RISK') {
+          // At Risk: Customers who haven't ordered recently
+          matches = orders >= 1 && totalSpent >= 50;
+        } else if (requiredRfmGroup === 'NEW') {
+          // New: Recent customers with few orders
+          matches = orders <= 2 && totalSpent <= 100;
+        }
+        
+        console.log(`🏆 RFM group check: orders=${orders}, spent=${totalSpent}, group=${requiredRfmGroup} = ${matches}`);
         return matches;
       }
     }
