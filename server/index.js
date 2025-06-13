@@ -470,84 +470,72 @@ app.get('/api/health', async (req, res) => {
   res.json(config);
 });
 
-// Version endpoint
+// Version API endpoint with detailed information
 app.get('/api/version', (req, res) => {
-  try {
-    const packageJson = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
-    res.json({
-      version: packageJson.version,
-      tagManagerVersion: packageJson.tagManagerVersion,
-      versionNotes: packageJson.versionNotes,
-      deployedAt: new Date().toISOString(),
-      lastCommit: process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown',
-      environment: process.env.NODE_ENV || 'production'
-    });
-  } catch (error) {
-    res.json({
-      version: '1.0.0',
-      tagManagerVersion: '1.0.0',
-      versionNotes: 'Initial release with comprehensive pagination and RFM group support',
-      deployedAt: new Date().toISOString(),
-      lastCommit: 'unknown',
-      environment: process.env.NODE_ENV || 'production',
-      error: 'Could not read package.json'
-    });
-  }
-});
-
-// Debug endpoint to show environment variables
-app.get('/api/debug/env', (req, res) => {
-  try {
-    const envVars = {
-      shopifyVars: {},
-      authVars: {},
-      systemVars: {}
-    };
-
-    // Get all environment variables starting with SHOPIFY
-    Object.keys(process.env).forEach(key => {
-      if (key.startsWith('SHOPIFY')) {
-        envVars.shopifyVars[key] = {
-          exists: !!process.env[key],
-          length: process.env[key]?.length || 0,
-          prefix: process.env[key]?.substring(0, 10) || 'undefined'
-        };
+  const packageJson = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
+  
+  res.json({
+    version: packageJson.version,
+    tagManagerVersion: packageJson.tagManagerVersion || packageJson.version,
+    versionNotes: packageJson.versionNotes || "Initial release",
+    deployedAt: new Date().toISOString(),
+    lastCommit: process.env.RAILWAY_GIT_COMMIT_SHA || "unknown",
+    environment: process.env.NODE_ENV || "development",
+    features: {
+      shopifyIntegration: true,
+      customerSegmentation: true,
+      rfmAnalysis: true,
+      bulkTagging: true,
+      persistentStorage: true,
+      authentication: true,
+      pagination: true,
+      rateLimiting: true,
+      errorHandling: true,
+      databaseIntegration: true,
+      frontendUI: true,
+      responsiveDesign: true,
+      debugging: true,
+      versionTracking: true,
+      healthChecks: true
+    },
+    knownIssues: [
+      "Champions Segment Pagination: Limited to 50 customers due to pagination issues",
+      "Static File Routing: Frontend routing conflicts with API endpoints",
+      "Large Segment Performance: May be slow for segments with 10,000+ customers"
+    ],
+    nextSteps: [
+      "Direct Tagging: Apply tags without customer sync",
+      "Bulk Operations: Use Shopify's bulk operations API",
+      "Performance Optimization: Improve large segment handling",
+      "Enhanced UI: Better user experience and feedback",
+      "Advanced Rules: More sophisticated tagging rule conditions"
+    ],
+    changelog: {
+      "1.0.0": {
+        date: "2025-06-13",
+        type: "major",
+        features: [
+          "Shopify Integration with Admin API and GraphQL",
+          "Customer Segmentation management",
+          "RFM Analysis support",
+          "Bulk Tagging system",
+          "PostgreSQL database integration",
+          "Authentication system",
+          "Real-time segment synchronization",
+          "Pagination support for large segments",
+          "Comprehensive error handling",
+          "Modern React frontend with Tailwind CSS"
+        ],
+        fixes: [
+          "Initial release - no previous fixes"
+        ],
+        knownIssues: [
+          "Champions segment pagination limited to 50 customers",
+          "Static file routing conflicts with API endpoints"
+        ]
       }
-    });
-
-    // Get auth-related variables
-    ['AUTH_USERNAME', 'AUTH_PASSWORD', 'SESSION_SECRET'].forEach(key => {
-      envVars.authVars[key] = {
-        exists: !!process.env[key],
-        length: process.env[key]?.length || 0,
-        value: key === 'AUTH_USERNAME' ? process.env[key] : '***masked***'
-      };
-    });
-
-    // Get system variables
-    ['NODE_ENV', 'PORT', 'npm_package_version'].forEach(key => {
-      envVars.systemVars[key] = process.env[key] || 'undefined';
-    });
-
-    // Summary
-    const summary = {
-      totalEnvVars: Object.keys(process.env).length,
-      shopifyVarsCount: Object.keys(envVars.shopifyVars).length,
-      allShopifyKeys: Object.keys(process.env).filter(key => key.includes('SHOPIFY') || key.includes('STORE') || key.includes('ACCESS')),
-      timestamp: new Date().toISOString()
-    };
-
-    res.json({
-      summary,
-      variables: envVars,
-      message: 'Environment variables debug info'
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: 'Failed to get environment variables',
-      details: error.message
-    });
-  }
+    }
+  });
 });
 
 // Debug endpoint to test GraphQL query specifically
