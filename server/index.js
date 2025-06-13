@@ -12,6 +12,137 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Helper function to fetch all customers with pagination
+async function fetchAllCustomersWithPagination(baseUrl, headers, queryParams = {}) {
+  const allCustomers = [];
+  let hasNextPage = true;
+  let pageInfo = null;
+  
+  console.log(`🔄 Starting paginated fetch from: ${baseUrl}`);
+  
+  while (hasNextPage) {
+    try {
+      // Add pagination parameters
+      const url = new URL(baseUrl);
+      Object.keys(queryParams).forEach(key => url.searchParams.set(key, queryParams[key]));
+      
+      if (pageInfo?.nextPageInfo?.page_info) {
+        url.searchParams.set('page_info', pageInfo.nextPageInfo.page_info);
+      } else if (pageInfo?.endCursor) {
+        url.searchParams.set('after', pageInfo.endCursor);
+      }
+      
+      console.log(`📄 Fetching page: ${url.toString()}`);
+      
+      const response = await fetch(url.toString(), { headers });
+      
+      if (!response.ok) {
+        console.error(`❌ API request failed: ${response.status} ${response.statusText}`);
+        break;
+      }
+      
+      const data = await response.json();
+      
+      // Handle different response formats
+      let customers = [];
+      if (data.customers) {
+        // REST API format
+        customers = data.customers;
+        hasNextPage = customers.length > 0 && customers.length >= (queryParams.limit || 250);
+        pageInfo = { nextPageInfo: { page_info: response.headers.get('Link') } };
+      } else if (data.data?.customers) {
+        // GraphQL format
+        customers = data.data.customers.edges.map(edge => edge.node);
+        hasNextPage = data.data.customers.pageInfo.hasNextPage;
+        pageInfo = data.data.customers.pageInfo;
+      }
+      
+      console.log(`📋 Fetched ${customers.length} customers on this page`);
+      allCustomers.push(...customers);
+      
+      // Rate limiting - wait a bit between requests
+      if (hasNextPage) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error fetching page:`, error);
+      break;
+    }
+  }
+  
+  console.log(`✅ Total customers fetched: ${allCustomers.length}`);
+  return allCustomers;
+}
+
+// Helper function to fetch all customers with GraphQL pagination
+async function fetchAllCustomersWithGraphQLPagination(query, variables = {}) {
+  const allCustomers = [];
+  let hasNextPage = true;
+  let endCursor = null;
+  
+  console.log(`🔄 Starting GraphQL paginated fetch`);
+  
+  while (hasNextPage) {
+    try {
+      const currentVariables = {
+        ...variables,
+        after: endCursor
+      };
+      
+      console.log(`📄 Fetching GraphQL page with cursor: ${endCursor || 'initial'}`);
+      
+      const response = await fetch(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query: query,
+            variables: currentVariables
+          })
+        }
+      );
+      
+      if (!response.ok) {
+        console.error(`❌ GraphQL request failed: ${response.status}`);
+        break;
+      }
+      
+      const data = await response.json();
+      
+      if (data.errors) {
+        console.error(`❌ GraphQL errors:`, data.errors);
+        break;
+      }
+      
+      const customers = data.data?.customers?.edges?.map(edge => edge.node) || [];
+      const pageInfo = data.data?.customers?.pageInfo;
+      
+      console.log(`📋 Fetched ${customers.length} customers on this page`);
+      allCustomers.push(...customers);
+      
+      hasNextPage = pageInfo?.hasNextPage || false;
+      endCursor = pageInfo?.endCursor || null;
+      
+      // Rate limiting
+      if (hasNextPage) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+    } catch (error) {
+      console.error(`❌ Error fetching GraphQL page:`, error);
+      break;
+    }
+  }
+  
+  console.log(`✅ Total customers fetched via GraphQL: ${allCustomers.length}`);
+  return allCustomers;
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -2312,80 +2443,42 @@ async function getCustomersFromShopifySegment(segmentId) {
     // Fallback to the original REST API approach for other criteria
     console.log(`🔄 Using fallback REST API approach for criteria: ${segment.criteria}`);
     
-    let allCustomers = [];
-    let page = 1;
-    const limit = 250;
-    let hasMore = true;
+    // Use the new pagination helper to fetch ALL customers
+    const allCustomers = await fetchAllCustomersWithPagination(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json`,
+      {
+        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+      },
+      { limit: 250 }
+    );
     
-    while (hasMore) {
-      console.log(`📄 Fetching customers page ${page} via REST API`);
-      
-      try {
-        const response = await fetch(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=${limit}&page=${page}`,
-          {
-            headers: {
-              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-            }
-          }
-        );
-        
-        if (!response.ok) {
-          console.error(`❌ REST API error: ${response.status}`);
-          break;
-        }
-        
-        const data = await response.json();
-        const customers = data.customers || [];
-        
-        console.log(`📋 Retrieved ${customers.length} customers from page ${page}`);
-        
-        if (customers.length === 0) {
-          hasMore = false;
-          break;
-        }
-        
-        // Filter customers based on segment criteria
-        const filteredCustomers = customers.filter(customer => {
-          return matchesSegmentCriteria(customer, segment.criteria);
-        });
-        
-        console.log(`🔍 Filtered ${filteredCustomers.length} customers matching criteria from page ${page}`);
-        
-        const processedCustomers = filteredCustomers.map(customer => ({
-          id: customer.id.toString(),
-          first_name: customer.first_name || '',
-          last_name: customer.last_name || '',
-          email: customer.email || '',
-          phone: customer.phone || '',
-          created_at: customer.created_at || new Date().toISOString(),
-          updated_at: customer.updated_at || new Date().toISOString(),
-          tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-          orders_count: customer.orders_count || 0,
-          total_spent: customer.total_spent || '0.00',
-          addresses: customer.addresses || [],
-          display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-          note: customer.note || ''
-        }));
-        
-        allCustomers = allCustomers.concat(processedCustomers);
-        console.log(`✅ Processed ${processedCustomers.length} matching customers (total: ${allCustomers.length})`);
-        
-        if (customers.length < limit) {
-          hasMore = false;
-        } else {
-          page++;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-        
-      } catch (error) {
-        console.error(`❌ Error fetching page ${page}:`, error.message);
-        break;
-      }
-    }
+    console.log(`📋 Retrieved ${allCustomers.length} total customers from Shopify`);
     
-    console.log(`🎉 Successfully retrieved ${allCustomers.length} customers matching segment criteria`);
-    return allCustomers;
+    // Filter customers based on segment criteria
+    const filteredCustomers = allCustomers.filter(customer => {
+      return matchesSegmentCriteria(customer, segment.criteria);
+    });
+    
+    console.log(`🔍 Filtered ${filteredCustomers.length} customers matching criteria`);
+    
+    const processedCustomers = filteredCustomers.map(customer => ({
+      id: customer.id.toString(),
+      first_name: customer.first_name || '',
+      last_name: customer.last_name || '',
+      email: customer.email || '',
+      phone: customer.phone || '',
+      created_at: customer.created_at || new Date().toISOString(),
+      updated_at: customer.updated_at || new Date().toISOString(),
+      tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+      orders_count: customer.orders_count || 0,
+      total_spent: customer.total_spent || '0.00',
+      addresses: customer.addresses || [],
+      display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+      note: customer.note || ''
+    }));
+    
+    console.log(`✅ Successfully processed ${processedCustomers.length} customers matching segment criteria`);
+    return processedCustomers;
     
   } catch (error) {
     console.error(`💥 Critical error getting customers from Shopify segment ${segmentId}:`, error);
@@ -2397,93 +2490,56 @@ async function getCustomersFromShopifySegment(segmentId) {
 async function fetchCustomersWithRfmGroupFallback(rfmGroup) {
   console.log(`🔄 Using fallback REST API approach for RFM group: ${rfmGroup}`);
   
-  let allCustomers = [];
-  let page = 1;
-  const limit = 250;
-  let hasMore = true;
+  // Use the new pagination helper to fetch ALL customers
+  const allCustomers = await fetchAllCustomersWithPagination(
+    `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json`,
+    {
+      'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+    },
+    { limit: 250 }
+  );
   
-  while (hasMore) {
-    console.log(`📄 Fetching customers page ${page} via REST API for RFM group ${rfmGroup}`);
+  console.log(`📋 Retrieved ${allCustomers.length} total customers from Shopify`);
+  
+  // For RFM groups, we need to calculate the RFM score for each customer
+  const filteredCustomers = allCustomers.filter(customer => {
+    const orders = customer.orders_count || 0;
+    const totalSpent = parseFloat(customer.total_spent || '0');
     
-    try {
-      const response = await fetch(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=${limit}&page=${page}`,
-        {
-          headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-          }
-        }
-      );
-      
-      if (!response.ok) {
-        console.error(`❌ REST API error: ${response.status}`);
-        break;
-      }
-      
-      const data = await response.json();
-      const customers = data.customers || [];
-      
-      console.log(`📋 Retrieved ${customers.length} customers from page ${page}`);
-      
-      if (customers.length === 0) {
-        hasMore = false;
-        break;
-      }
-      
-      // For RFM groups, we need to calculate the RFM score for each customer
-      // This is a simplified approach - in practice, you might need more sophisticated RFM calculation
-      const filteredCustomers = customers.filter(customer => {
-        // For now, we'll use a simple heuristic based on orders and total spent
-        // This is a placeholder - actual RFM calculation would be more complex
-        const orders = customer.orders_count || 0;
-        const totalSpent = parseFloat(customer.total_spent || '0');
-        const lastOrderDate = customer.updated_at;
-        
-        // Simple RFM logic for CHAMPIONS group (high frequency, high monetary value)
-        if (rfmGroup === 'CHAMPIONS') {
-          return orders >= 5 && totalSpent >= 500; // Example criteria for champions
-        }
-        
-        // Add other RFM group logic as needed
-        return false;
-      });
-      
-      console.log(`🔍 Filtered ${filteredCustomers.length} customers matching RFM group ${rfmGroup} from page ${page}`);
-      
-      const processedCustomers = filteredCustomers.map(customer => ({
-        id: customer.id.toString(),
-        first_name: customer.first_name || '',
-        last_name: customer.last_name || '',
-        email: customer.email || '',
-        phone: customer.phone || '',
-        created_at: customer.created_at || new Date().toISOString(),
-        updated_at: customer.updated_at || new Date().toISOString(),
-        tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-        orders_count: customer.orders_count || 0,
-        total_spent: customer.total_spent || '0.00',
-        addresses: customer.addresses || [],
-        display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-        note: customer.note || ''
-      }));
-      
-      allCustomers = allCustomers.concat(processedCustomers);
-      console.log(`✅ Processed ${processedCustomers.length} matching customers (total: ${allCustomers.length})`);
-      
-      if (customers.length < limit) {
-        hasMore = false;
-      } else {
-        page++;
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-      
-    } catch (error) {
-      console.error(`❌ Error fetching page ${page}:`, error.message);
-      break;
+    // Simple RFM logic for CHAMPIONS group (high frequency, high monetary value)
+    if (rfmGroup === 'CHAMPIONS') {
+      return orders >= 5 && totalSpent >= 500; // Example criteria for champions
+    } else if (rfmGroup === 'LOYAL_CUSTOMERS') {
+      return orders >= 3 && totalSpent >= 200;
+    } else if (rfmGroup === 'AT_RISK') {
+      return orders >= 1 && totalSpent >= 50;
+    } else if (rfmGroup === 'CANT_LOSE') {
+      return orders === 0 || totalSpent < 50;
     }
-  }
+    
+    return false;
+  });
   
-  console.log(`🎉 Successfully retrieved ${allCustomers.length} customers matching RFM group ${rfmGroup}`);
-  return allCustomers;
+  console.log(`🔍 Filtered ${filteredCustomers.length} customers matching RFM group ${rfmGroup}`);
+  
+  const processedCustomers = filteredCustomers.map(customer => ({
+    id: customer.id.toString(),
+    first_name: customer.first_name || '',
+    last_name: customer.last_name || '',
+    email: customer.email || '',
+    phone: customer.phone || '',
+    created_at: customer.created_at || new Date().toISOString(),
+    updated_at: customer.updated_at || new Date().toISOString(),
+    tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+    orders_count: customer.orders_count || 0,
+    total_spent: customer.total_spent || '0.00',
+    addresses: customer.addresses || [],
+    display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+    note: customer.note || ''
+  }));
+  
+  console.log(`✅ Successfully processed ${processedCustomers.length} customers for RFM group ${rfmGroup}`);
+  return processedCustomers;
 }
 
 // Helper function to check if a customer matches segment criteria
