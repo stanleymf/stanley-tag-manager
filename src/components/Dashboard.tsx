@@ -25,6 +25,7 @@ export function Dashboard() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [loadingCounts, setLoadingCounts] = useState<Set<string>>(new Set());
+  const [syncingCustomers, setSyncingCustomers] = useState<Set<string>>(new Set());
 
   const loadSegments = async () => {
     try {
@@ -60,8 +61,6 @@ export function Dashboard() {
   };
 
   const fetchCustomerCount = async (segment: CustomerSegment) => {
-    if (!segment.needsCustomerCount) return; // Already has count
-    
     setLoadingCounts(prev => new Set(prev).add(segment.id));
     
     try {
@@ -78,6 +77,30 @@ export function Dashboard() {
       console.error(`Error fetching count for ${segment.name}:`, err);
     } finally {
       setLoadingCounts(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(segment.id);
+        return newSet;
+      });
+    }
+  };
+
+  const handleSyncCustomers = async (segment: CustomerSegment) => {
+    setSyncingCustomers(prev => new Set(prev).add(segment.id));
+    
+    try {
+      const result = await apiService.syncCustomersInSegment(segment.name);
+      if (result.success) {
+        // Update the segment with the actual count from sync
+        setSegments(prev => prev.map(s => 
+          s.id === segment.id 
+            ? { ...s, customerCount: result.actualCount, needsCustomerCount: false }
+            : s
+        ));
+      }
+    } catch (err) {
+      console.error(`Error syncing customers for ${segment.name}:`, err);
+    } finally {
+      setSyncingCustomers(prev => {
         const newSet = new Set(prev);
         newSet.delete(segment.id);
         return newSet;
@@ -252,13 +275,31 @@ export function Dashboard() {
                         {loadingCounts.has(segment.id) ? (
                           <Loader2 className="h-3 w-3 animate-spin" />
                         ) : (
-                          'Load Count'
+                          <>
+                            <RefreshCw className="h-3 w-3 mr-1" />
+                            Load Count
+                          </>
                         )}
                       </Button>
                     ) : (
-                      <Badge variant="secondary" className="font-mono">
-                        {segment.customerCount.toLocaleString()}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary" className="font-mono">
+                          {segment.customerCount.toLocaleString()}
+                        </Badge>
+                        <Button
+                          onClick={() => fetchCustomerCount(segment)}
+                          disabled={loadingCounts.has(segment.id)}
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs"
+                        >
+                          {loadingCounts.has(segment.id) ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-3 w-3" />
+                          )}
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -276,6 +317,25 @@ export function Dashboard() {
                   >
                     <Eye className="h-4 w-4 mr-2" />
                     View Customers
+                  </Button>
+                  <Button
+                    onClick={() => handleSyncCustomers(segment)}
+                    disabled={syncingCustomers.has(segment.id)}
+                    variant="outline"
+                    size="sm"
+                    className="flex-1"
+                  >
+                    {syncingCustomers.has(segment.id) ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Sync Customers
+                      </>
+                    )}
                   </Button>
                 </div>
               </div>
