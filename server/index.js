@@ -650,14 +650,6 @@ app.get('/api/test/segment-members', requireAuth, async (req, res) => {
           edges {
             node {
               id
-              customer {
-                id
-                firstName
-                lastName
-                email
-                numberOfOrders
-                tags
-              }
             }
           }
           pageInfo {
@@ -698,15 +690,15 @@ app.get('/api/test/segment-members', requireAuth, async (req, res) => {
     const data = await response.json();
     console.log('GraphQL response:', JSON.stringify(data, null, 2));
     
-    const customers = data.data?.customerSegmentMembers?.edges?.map(edge => edge.node.customer) || [];
+    const edges = data.data?.customerSegmentMembers?.edges || [];
     
     res.json({
       success: true,
       status: response.status,
       segmentId: segmentId,
       data: data,
-      customerCount: customers.length,
-      customers: customers,
+      customerCount: edges.length,
+      edges: edges,
       pageInfo: data.data?.customerSegmentMembers?.pageInfo
     });
     
