@@ -778,6 +778,308 @@ app.get('/api/test/email-domain', requireAuth, async (req, res) => {
   }
 });
 
+// Test endpoint to debug segment issues
+app.get('/api/test/segment/:segmentId', async (req, res) => {
+  try {
+    const { segmentId } = req.params;
+    console.log(`🧪 Testing segment: ${segmentId}`);
+    
+    // Get segment details from database
+    const segment = await db.get('SELECT * FROM segments WHERE id = ?', [segmentId]);
+    if (!segment) {
+      return res.status(404).json({ error: 'Segment not found' });
+    }
+    
+    const results = {
+      segment: {
+        id: segment.id,
+        name: segment.name,
+        criteria: segment.criteria,
+        created_at: segment.created_at
+      },
+      tests: {}
+    };
+    
+    console.log(`📋 Testing segment criteria: ${segment.criteria}`);
+    
+    // Test 1: Check if we can access Shopify API at all
+    try {
+      const testResponse = await fetch(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=1`,
+        {
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          }
+        }
+      );
+      
+      results.tests.shopify_access = {
+        status: testResponse.status,
+        ok: testResponse.ok,
+        message: testResponse.ok ? 'Shopify API accessible' : 'Shopify API not accessible'
+      };
+    } catch (error) {
+      results.tests.shopify_access = {
+        status: 'error',
+        ok: false,
+        message: error.message
+      };
+    }
+    
+    // Test 2: Try to get all customers to see what's available
+    try {
+      const customersResponse = await fetch(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=10`,
+        {
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          }
+        }
+      );
+      
+      if (customersResponse.ok) {
+        const customersData = await customersResponse.json();
+        const customers = customersData.customers || [];
+        
+        results.tests.customer_sample = {
+          status: customersResponse.status,
+          ok: true,
+          total_customers: customers.length,
+          sample_customers: customers.map(customer => ({
+            id: customer.id,
+            email: customer.email,
+            first_name: customer.first_name,
+            last_name: customer.last_name,
+            orders_count: customer.orders_count,
+            total_spent: customer.total_spent,
+            tags: customer.tags
+          }))
+        };
+      } else {
+        results.tests.customer_sample = {
+          status: customersResponse.status,
+          ok: false,
+          message: 'Failed to fetch customers'
+        };
+      }
+    } catch (error) {
+      results.tests.customer_sample = {
+        status: 'error',
+        ok: false,
+        message: error.message
+      };
+    }
+    
+    // Test 3: Try customer search API with different queries
+    if (segment.criteria.includes('rfm_group')) {
+      const rfmMatch = segment.criteria.match(/rfm_group = '([^']+)'/);
+      if (rfmMatch) {
+        const rfmGroup = rfmMatch[1];
+        
+        // Test search API with RFM group
+        try {
+          const searchResponse = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/search.json?query=rfm_group:${rfmGroup}`,
+            {
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+              }
+            }
+          );
+          
+          results.tests.rfm_search = {
+            status: searchResponse.status,
+            ok: searchResponse.ok,
+            query: `rfm_group:${rfmGroup}`,
+            message: searchResponse.ok ? 'Search API accessible' : 'Search API failed'
+          };
+          
+          if (searchResponse.ok) {
+            const searchData = await searchResponse.json();
+            results.tests.rfm_search.customers_found = searchData.customers?.length || 0;
+            results.tests.rfm_search.sample_results = searchData.customers?.slice(0, 3).map(customer => ({
+              id: customer.id,
+              email: customer.email,
+              orders_count: customer.orders_count,
+              total_spent: customer.total_spent
+            })) || [];
+          }
+        } catch (error) {
+          results.tests.rfm_search = {
+            status: 'error',
+            ok: false,
+            query: `rfm_group:${rfmGroup}`,
+            message: error.message
+          };
+        }
+        
+        // Test GraphQL with RFM group
+        try {
+          const graphqlQuery = `
+            query testRfmGroup($first: Int!) {
+              customers(first: $first, query: "rfm_group:${rfmGroup}") {
+                edges {
+                  node {
+                    id
+                    email
+                    ordersCount
+                    totalSpent
+                  }
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+              }
+            }
+          `;
+          
+          const graphqlResponse = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+            {
+              method: 'POST',
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                query: graphqlQuery,
+                variables: {
+                  first: 10
+                }
+              })
+            }
+          );
+          
+          results.tests.rfm_graphql = {
+            status: graphqlResponse.status,
+            ok: graphqlResponse.ok,
+            query: `rfm_group:${rfmGroup}`,
+            message: graphqlResponse.ok ? 'GraphQL accessible' : 'GraphQL failed'
+          };
+          
+          if (graphqlResponse.ok) {
+            const graphqlData = await graphqlResponse.json();
+            results.tests.rfm_graphql.errors = graphqlData.errors;
+            results.tests.rfm_graphql.customers_found = graphqlData.data?.customers?.edges?.length || 0;
+            results.tests.rfm_graphql.sample_results = graphqlData.data?.customers?.edges?.slice(0, 3).map(edge => ({
+              id: edge.node.id,
+              email: edge.node.email,
+              orders_count: edge.node.ordersCount,
+              total_spent: edge.node.totalSpent
+            })) || [];
+          }
+        } catch (error) {
+          results.tests.rfm_graphql = {
+            status: 'error',
+            ok: false,
+            query: `rfm_group:${rfmGroup}`,
+            message: error.message
+          };
+        }
+        
+        // Test customer segment endpoint
+        try {
+          const segmentId = segment.id.replace('gid://shopify/Segment/', '');
+          const segmentResponse = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customer_segments/${segmentId}/customers.json`,
+            {
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+              }
+            }
+          );
+          
+          results.tests.segment_endpoint = {
+            status: segmentResponse.status,
+            ok: segmentResponse.ok,
+            segment_id: segmentId,
+            message: segmentResponse.ok ? 'Segment endpoint accessible' : 'Segment endpoint failed'
+          };
+          
+          if (segmentResponse.ok) {
+            const segmentData = await segmentResponse.json();
+            results.tests.segment_endpoint.customers_found = segmentData.customers?.length || 0;
+            results.tests.segment_endpoint.sample_results = segmentData.customers?.slice(0, 3).map(customer => ({
+              id: customer.id,
+              email: customer.email,
+              orders_count: customer.orders_count,
+              total_spent: customer.total_spent
+            })) || [];
+          }
+        } catch (error) {
+          results.tests.segment_endpoint = {
+            status: 'error',
+            ok: false,
+            segment_id: segment.id,
+            message: error.message
+          };
+        }
+      }
+    }
+    
+    // Test 4: Try different search queries to see what works
+    try {
+      const testQueries = [
+        'orders_count:>0',
+        'total_spent:>0',
+        'tag:champion',
+        'tag:CHAMPIONS',
+        'email:*@windflowerflorist.com'
+      ];
+      
+      results.tests.search_queries = {};
+      
+      for (const query of testQueries) {
+        try {
+          const searchResponse = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/search.json?query=${encodeURIComponent(query)}`,
+            {
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+              }
+            }
+          );
+          
+          if (searchResponse.ok) {
+            const searchData = await searchResponse.json();
+            results.tests.search_queries[query] = {
+              status: searchResponse.status,
+              ok: true,
+              customers_found: searchData.customers?.length || 0
+            };
+          } else {
+            results.tests.search_queries[query] = {
+              status: searchResponse.status,
+              ok: false,
+              message: 'Search failed'
+            };
+          }
+        } catch (error) {
+          results.tests.search_queries[query] = {
+            status: 'error',
+            ok: false,
+            message: error.message
+          };
+        }
+      }
+    } catch (error) {
+      results.tests.search_queries = {
+        status: 'error',
+        ok: false,
+        message: error.message
+      };
+    }
+    
+    console.log(`✅ Test results for segment ${segmentId}:`, JSON.stringify(results, null, 2));
+    res.json(results);
+    
+  } catch (error) {
+    console.error('Error testing segment:', error);
+    res.status(500).json({ error: 'Failed to test segment', details: error.message });
+  }
+});
+
 // Serve React app for all other routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/client/index.html'));
@@ -1452,47 +1754,93 @@ async function getCustomersFromShopifySegment(segmentId) {
         const rfmGroup = rfmMatch[1];
         console.log(`🏆 Fetching customers with RFM group: ${rfmGroup}`);
         
-        // RFM groups are Shopify's internal segmentation, use GraphQL to fetch
-        const graphqlQuery = `
-          query getCustomersByRfmGroup($rfmGroup: String!, $first: Int!) {
-            customers(first: $first, query: "rfm_group:${rfmGroup}") {
-              edges {
-                node {
-                  id
-                  firstName
-                  lastName
-                  email
-                  phone
-                  createdAt
-                  updatedAt
-                  tags
-                  ordersCount
-                  totalSpent
-                  addresses {
-                    id
-                    firstName
-                    lastName
-                    company
-                    address1
-                    address2
-                    city
-                    province
-                    country
-                    zip
-                    phone
-                  }
-                  note
-                }
-              }
-              pageInfo {
-                hasNextPage
-                endCursor
+        // Try multiple approaches for RFM groups based on Shopify documentation
+        
+        // Approach 1: Try Shopify's customer search API with RFM group
+        try {
+          console.log(`🔍 Approach 1: Using customer search API with RFM group`);
+          const searchResponse = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/search.json?query=rfm_group:${rfmGroup}`,
+            {
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
               }
             }
+          );
+          
+          if (searchResponse.ok) {
+            const searchData = await searchResponse.json();
+            const customers = searchData.customers || [];
+            console.log(`📋 Found ${customers.length} customers via search API`);
+            
+            if (customers.length > 0) {
+              return customers.map(customer => ({
+                id: customer.id.toString(),
+                first_name: customer.first_name || '',
+                last_name: customer.last_name || '',
+                email: customer.email || '',
+                phone: customer.phone || '',
+                created_at: customer.created_at || new Date().toISOString(),
+                updated_at: customer.updated_at || new Date().toISOString(),
+                tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+                orders_count: customer.orders_count || 0,
+                total_spent: customer.total_spent || '0.00',
+                addresses: customer.addresses || [],
+                display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+                note: customer.note || ''
+              }));
+            }
           }
-        `;
+        } catch (error) {
+          console.log(`❌ Search API approach failed:`, error.message);
+        }
         
+        // Approach 2: Try GraphQL with customer segment query
         try {
+          console.log(`🔍 Approach 2: Using GraphQL customer segment query`);
+          const graphqlQuery = `
+            query getCustomersBySegment($segmentId: ID!, $first: Int!) {
+              customerSegment(id: $segmentId) {
+                id
+                name
+                customers(first: $first) {
+                  edges {
+                    node {
+                      id
+                      firstName
+                      lastName
+                      email
+                      phone
+                      createdAt
+                      updatedAt
+                      tags
+                      ordersCount
+                      totalSpent
+                      addresses {
+                        id
+                        firstName
+                        lastName
+                        company
+                        address1
+                        address2
+                        city
+                        province
+                        country
+                        zip
+                        phone
+                      }
+                      note
+                    }
+                  }
+                  pageInfo {
+                    hasNextPage
+                    endCursor
+                  }
+                }
+              }
+            }
+          `;
+          
           const response = await fetch(
             `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
             {
@@ -1504,51 +1852,175 @@ async function getCustomersFromShopifySegment(segmentId) {
               body: JSON.stringify({
                 query: graphqlQuery,
                 variables: {
-                  rfmGroup: rfmGroup,
+                  segmentId: segmentId,
                   first: 250
                 }
               })
             }
           );
           
-          if (!response.ok) {
-            console.error(`❌ GraphQL API error: ${response.status}`);
-            // Fallback to REST API with filtering
-            return await fetchCustomersWithRfmGroupFallback(rfmGroup);
+          if (response.ok) {
+            const data = await response.json();
+            
+            if (!data.errors && data.data?.customerSegment?.customers) {
+              const customers = data.data.customerSegment.customers.edges.map(edge => edge.node);
+              console.log(`📋 Found ${customers.length} customers via GraphQL segment query`);
+              
+              if (customers.length > 0) {
+                return customers.map(customer => ({
+                  id: customer.id.split('/').pop(),
+                  first_name: customer.firstName || '',
+                  last_name: customer.lastName || '',
+                  email: customer.email || '',
+                  phone: customer.phone || '',
+                  created_at: customer.createdAt || new Date().toISOString(),
+                  updated_at: customer.updatedAt || new Date().toISOString(),
+                  tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+                  orders_count: customer.ordersCount || 0,
+                  total_spent: customer.totalSpent || '0.00',
+                  addresses: customer.addresses || [],
+                  display_name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+                  note: customer.note || ''
+                }));
+              }
+            }
           }
-          
-          const data = await response.json();
-          
-          if (data.errors) {
-            console.error(`❌ GraphQL errors:`, data.errors);
-            // Fallback to REST API with filtering
-            return await fetchCustomersWithRfmGroupFallback(rfmGroup);
-          }
-          
-          const customers = data.data?.customers?.edges?.map(edge => edge.node) || [];
-          console.log(`📋 Found ${customers.length} customers with RFM group ${rfmGroup} via GraphQL`);
-          
-          return customers.map(customer => ({
-            id: customer.id.split('/').pop(),
-            first_name: customer.firstName || '',
-            last_name: customer.lastName || '',
-            email: customer.email || '',
-            phone: customer.phone || '',
-            created_at: customer.createdAt || new Date().toISOString(),
-            updated_at: customer.updatedAt || new Date().toISOString(),
-            tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-            orders_count: customer.ordersCount || 0,
-            total_spent: customer.totalSpent || '0.00',
-            addresses: customer.addresses || [],
-            display_name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
-            note: customer.note || ''
-          }));
-          
         } catch (error) {
-          console.error(`❌ GraphQL request failed:`, error);
-          // Fallback to REST API with filtering
-          return await fetchCustomersWithRfmGroupFallback(rfmGroup);
+          console.log(`❌ GraphQL segment approach failed:`, error.message);
         }
+        
+        // Approach 3: Try REST API with customer segment endpoint
+        try {
+          console.log(`🔍 Approach 3: Using REST API customer segment endpoint`);
+          const segmentId = segment.id.replace('gid://shopify/Segment/', '');
+          const segmentResponse = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customer_segments/${segmentId}/customers.json`,
+            {
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+              }
+            }
+          );
+          
+          if (segmentResponse.ok) {
+            const segmentData = await segmentResponse.json();
+            const customers = segmentData.customers || [];
+            console.log(`📋 Found ${customers.length} customers via REST segment endpoint`);
+            
+            if (customers.length > 0) {
+              return customers.map(customer => ({
+                id: customer.id.toString(),
+                first_name: customer.first_name || '',
+                last_name: customer.last_name || '',
+                email: customer.email || '',
+                phone: customer.phone || '',
+                created_at: customer.created_at || new Date().toISOString(),
+                updated_at: customer.updated_at || new Date().toISOString(),
+                tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+                orders_count: customer.orders_count || 0,
+                total_spent: customer.total_spent || '0.00',
+                addresses: customer.addresses || [],
+                display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+                note: customer.note || ''
+              }));
+            }
+          }
+        } catch (error) {
+          console.log(`❌ REST segment endpoint approach failed:`, error.message);
+        }
+        
+        // Approach 4: Try GraphQL with customer query and RFM filter
+        try {
+          console.log(`🔍 Approach 4: Using GraphQL customer query with RFM filter`);
+          const graphqlQuery = `
+            query getCustomersWithRfmFilter($first: Int!) {
+              customers(first: $first, query: "rfm_group:${rfmGroup}") {
+                edges {
+                  node {
+                    id
+                    firstName
+                    lastName
+                    email
+                    phone
+                    createdAt
+                    updatedAt
+                    tags
+                    ordersCount
+                    totalSpent
+                    addresses {
+                      id
+                      firstName
+                      lastName
+                      company
+                      address1
+                      address2
+                      city
+                      province
+                      country
+                      zip
+                      phone
+                    }
+                    note
+                  }
+                }
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+              }
+            }
+          `;
+          
+          const response = await fetch(
+            `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+            {
+              method: 'POST',
+              headers: {
+                'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                query: graphqlQuery,
+                variables: {
+                  first: 250
+                }
+              })
+            }
+          );
+          
+          if (response.ok) {
+            const data = await response.json();
+            
+            if (!data.errors && data.data?.customers) {
+              const customers = data.data.customers.edges.map(edge => edge.node);
+              console.log(`📋 Found ${customers.length} customers via GraphQL RFM filter`);
+              
+              if (customers.length > 0) {
+                return customers.map(customer => ({
+                  id: customer.id.split('/').pop(),
+                  first_name: customer.firstName || '',
+                  last_name: customer.lastName || '',
+                  email: customer.email || '',
+                  phone: customer.phone || '',
+                  created_at: customer.createdAt || new Date().toISOString(),
+                  updated_at: customer.updatedAt || new Date().toISOString(),
+                  tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+                  orders_count: customer.ordersCount || 0,
+                  total_spent: customer.totalSpent || '0.00',
+                  addresses: customer.addresses || [],
+                  display_name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
+                  note: customer.note || ''
+                }));
+              }
+            }
+          }
+        } catch (error) {
+          console.log(`❌ GraphQL RFM filter approach failed:`, error.message);
+        }
+        
+        // Approach 5: Fallback to REST API with custom RFM calculation
+        console.log(`🔍 Using fallback REST API with custom RFM calculation`);
+        return await fetchCustomersWithRfmGroupFallback(rfmGroup);
       }
     }
     
