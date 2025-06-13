@@ -1349,12 +1349,12 @@ async function getCustomersBySegment(segmentName) {
   }
 }
 
-// Get customers from a real Shopify segment using REST API with filtering
+// Get customers from a real Shopify segment using simplified approach
 async function getCustomersFromShopifySegment(segmentId) {
   try {
-    console.log(`🔄 Starting REST API fetch for Shopify segment: ${segmentId}`);
+    console.log(`🔄 Starting simplified approach for segment: ${segmentId}`);
     
-    // First, get the segment details to understand the filtering criteria
+    // Get segment details first
     const segments = await getCustomerSegments();
     const segment = segments.find(s => s.id === segmentId);
     
@@ -1365,10 +1365,95 @@ async function getCustomersFromShopifySegment(segmentId) {
     
     console.log(`📋 Segment criteria: ${segment.criteria}`);
     
-    // Use REST API to get customers with segment filtering
+    // Use a simple approach based on criteria type
+    if (segment.criteria.includes('customer_email_domain')) {
+      const domainMatch = segment.criteria.match(/customer_email_domain = '([^']+)'/);
+      if (domainMatch) {
+        const domain = domainMatch[1];
+        console.log(`📧 Fetching customers with email domain: ${domain}`);
+        
+        // Use Shopify's customer search by email domain
+        const response = await fetch(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/search.json?query=email:*@${domain}`,
+          {
+            headers: {
+              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            }
+          }
+        );
+        
+        if (!response.ok) {
+          console.error(`❌ Search API error: ${response.status}`);
+          return [];
+        }
+        
+        const data = await response.json();
+        const customers = data.customers || [];
+        
+        console.log(`📋 Found ${customers.length} customers with domain ${domain}`);
+        
+        return customers.map(customer => ({
+          id: customer.id.toString(),
+          first_name: customer.first_name || '',
+          last_name: customer.last_name || '',
+          email: customer.email || '',
+          phone: customer.phone || '',
+          created_at: customer.created_at || new Date().toISOString(),
+          updated_at: customer.updated_at || new Date().toISOString(),
+          tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+          orders_count: customer.orders_count || 0,
+          total_spent: customer.total_spent || '0.00',
+          addresses: customer.addresses || [],
+          display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+          note: customer.note || ''
+        }));
+      }
+    } else if (segment.criteria.includes('customer_tags')) {
+      const tagMatch = segment.criteria.match(/customer_tags CONTAINS '([^']+)'/);
+      if (tagMatch) {
+        const tag = tagMatch[1];
+        console.log(`🏷️ Fetching customers with tag: ${tag}`);
+        
+        const response = await fetch(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=${encodeURIComponent(tag)}&limit=250`,
+          {
+            headers: {
+              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            }
+          }
+        );
+        
+        if (!response.ok) return [];
+        
+        const data = await response.json();
+        const customers = data.customers || [];
+        
+        console.log(`📋 Found ${customers.length} customers with tag ${tag}`);
+        
+        return customers.map(customer => ({
+          id: customer.id.toString(),
+          first_name: customer.first_name || '',
+          last_name: customer.last_name || '',
+          email: customer.email || '',
+          phone: customer.phone || '',
+          created_at: customer.created_at || new Date().toISOString(),
+          updated_at: customer.updated_at || new Date().toISOString(),
+          tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+          orders_count: customer.orders_count || 0,
+          total_spent: customer.total_spent || '0.00',
+          addresses: customer.addresses || [],
+          display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+          note: customer.note || ''
+        }));
+      }
+    }
+    
+    // Fallback to the original REST API approach for other criteria
+    console.log(`🔄 Using fallback REST API approach for criteria: ${segment.criteria}`);
+    
     let allCustomers = [];
     let page = 1;
-    const limit = 250; // Shopify REST API limit
+    const limit = 250;
     let hasMore = true;
     
     while (hasMore) {
@@ -1425,12 +1510,10 @@ async function getCustomersFromShopifySegment(segmentId) {
         allCustomers = allCustomers.concat(processedCustomers);
         console.log(`✅ Processed ${processedCustomers.length} matching customers (total: ${allCustomers.length})`);
         
-        // Check if we have more pages
         if (customers.length < limit) {
           hasMore = false;
         } else {
           page++;
-          // Rate limiting
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
@@ -1440,7 +1523,7 @@ async function getCustomersFromShopifySegment(segmentId) {
       }
     }
     
-    console.log(`🎉 Successfully retrieved ${allCustomers.length} customers matching segment criteria via REST API`);
+    console.log(`🎉 Successfully retrieved ${allCustomers.length} customers matching segment criteria`);
     return allCustomers;
     
   } catch (error) {
