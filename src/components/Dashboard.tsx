@@ -26,6 +26,7 @@ export function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loadingCounts, setLoadingCounts] = useState<Set<string>>(new Set());
   const [syncingCustomers, setSyncingCustomers] = useState<Set<string>>(new Set());
+  const [showSegmentIds, setShowSegmentIds] = useState(false);
 
   const loadSegments = async () => {
     try {
@@ -153,18 +154,28 @@ export function Dashboard() {
             Manage and view your Shopify customer segments
           </p>
         </div>
-        <Button 
-          onClick={handleRefresh} 
-          disabled={isRefreshing}
-          className="flex items-center gap-2"
-        >
-          {isRefreshing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
-          {isRefreshing ? 'Syncing...' : 'Sync Segments'}
-        </Button>
+        <div className="flex gap-2">
+          <Button 
+            onClick={() => setShowSegmentIds(!showSegmentIds)}
+            variant="outline"
+            className="flex items-center gap-2"
+          >
+            <Eye className="h-4 w-4" />
+            {showSegmentIds ? 'Hide IDs' : 'Show IDs'}
+          </Button>
+          <Button 
+            onClick={handleRefresh} 
+            disabled={isRefreshing}
+            className="flex items-center gap-2"
+          >
+            {isRefreshing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            {isRefreshing ? 'Syncing...' : 'Sync Segments'}
+          </Button>
+        </div>
       </div>
 
       {/* Stats Cards */}
@@ -253,6 +264,11 @@ export function Dashboard() {
                   <CardTitle className="text-lg text-gray-900 mb-1">
                     {segment.name}
                   </CardTitle>
+                  {showSegmentIds && (
+                    <p className="text-xs text-gray-400 font-mono mb-1">
+                      ID: {segment.id}
+                    </p>
+                  )}
                   <p className="text-sm text-gray-500 line-clamp-2">
                     {segment.description || segment.criteria}
                   </p>

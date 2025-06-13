@@ -409,6 +409,33 @@ app.post('/api/rules/:id/execute', requireAuth, handleExecuteRule);
 app.get('/api/segments/count', requireAuth, handleSegmentCount);
 app.get('/api/customers/sync', requireAuth, handleCustomersSync);
 
+// Simple endpoint to list all segments with IDs for debugging
+app.get('/api/segments/list', requireAuth, async (req, res) => {
+  try {
+    console.log('=== SEGMENTS LIST API CALLED ===');
+    
+    const segments = await getCustomerSegments();
+    
+    const segmentsList = segments.map(segment => ({
+      id: segment.id,
+      name: segment.name,
+      criteria: segment.criteria,
+      created_at: segment.created_at
+    }));
+    
+    console.log(`Returning ${segmentsList.length} segments with IDs`);
+    res.json({
+      total_segments: segmentsList.length,
+      segments: segmentsList,
+      champions_segment: segmentsList.find(s => s.name.toLowerCase().includes('champion'))
+    });
+    
+  } catch (error) {
+    console.error('Error listing segments:', error);
+    res.status(500).json({ error: 'Failed to list segments', details: error.message });
+  }
+});
+
 // Health check with configuration status
 app.get('/api/health', async (req, res) => {
   const config = {
