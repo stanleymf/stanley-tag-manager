@@ -3215,6 +3215,81 @@ app.get('/api/test-champions', async (req, res) => {
   }
 });
 
+// Debug endpoint to test direct segment customers endpoint
+app.get('/api/debug/segment-customers', requireAuth, async (req, res) => {
+  try {
+    const { segmentId } = req.query;
+    
+    if (!segmentId) {
+      return res.status(400).json({ error: 'Segment ID is required' });
+    }
+    
+    console.log(`🔍 Testing direct segment customers endpoint for: ${segmentId}`);
+    
+    // Extract numeric ID from GID
+    const numericId = segmentId.replace('gid://shopify/Segment/', '');
+    console.log(`📋 Using numeric ID: ${numericId}`);
+    
+    // Test the direct segment customers endpoint
+    const response = await fetch(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customer_segments/${numericId}/customers.json?limit=250`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+        }
+      }
+    );
+    
+    console.log(`📊 Response status: ${response.status}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ Error response: ${errorText}`);
+      return res.status(response.status).json({
+        error: `Shopify API error: ${response.status}`,
+        details: errorText
+      });
+    }
+    
+    const data = await response.json();
+    const customers = data.customers || [];
+    
+    console.log(`📋 Found ${customers.length} customers in first page`);
+    
+    // Check if there are more pages
+    const linkHeader = response.headers.get('Link');
+    const hasNextPage = linkHeader && linkHeader.includes('rel="next"');
+    
+    res.json({
+      success: true,
+      segmentId: segmentId,
+      numericId: numericId,
+      customerCount: customers.length,
+      hasNextPage: hasNextPage,
+      linkHeader: linkHeader,
+      firstCustomer: customers[0] ? {
+        id: customers[0].id,
+        email: customers[0].email,
+        orders_count: customers[0].orders_count,
+        total_spent: customers[0].total_spent
+      } : null,
+      sampleCustomers: customers.slice(0, 3).map(c => ({
+        id: c.id,
+        email: c.email,
+        orders_count: c.orders_count,
+        total_spent: c.total_spent
+      }))
+    });
+    
+  } catch (error) {
+    console.error('Error testing segment customers endpoint:', error);
+    res.status(500).json({
+      error: 'Internal server error',
+      details: error.message
+    });
+  }
+});
+
 // Start the server
 startServer();
 
