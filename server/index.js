@@ -2916,6 +2916,113 @@ async function gracefulShutdown() {
 process.on('SIGTERM', gracefulShutdown);
 process.on('SIGINT', gracefulShutdown);
 
+// Debug endpoint for Champions segment
+app.get('/api/debug/champions', requireAuth, async (req, res) => {
+  try {
+    const segmentId = req.query.segmentId;
+    if (!segmentId) {
+      return res.json({ error: 'Missing segmentId parameter' });
+    }
+    
+    console.log('=== CHAMPIONS DEBUG for segment:', segmentId, '===');
+    
+    // Test 1: Get segment details
+    const segmentQuery = `
+      query getSegment($id: ID!) {
+        segment(id: $id) {
+          id
+          name
+          query
+          creationDate
+          lastEditDate
+        }
+      }
+    `;
+    
+    const segmentResponse = await fetch(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: segmentQuery,
+          variables: { id: segmentId }
+        })
+      }
+    );
+    
+    const segmentData = await segmentResponse.json();
+    
+    // Test 2: Try customerSegmentMembers
+    const membersQuery = `
+      query getSegmentMembers($id: ID!, $first: Int!) {
+        customerSegmentMembers(segmentId: $id, first: $first) {
+          edges {
+            node {
+              id
+              customer {
+                id
+                firstName
+                lastName
+                email
+                numberOfOrders
+                tags
+              }
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+        }
+      }
+    `;
+    
+    const membersResponse = await fetch(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: membersQuery,
+          variables: { id: segmentId, first: 250 }
+        })
+      }
+    );
+    
+    const membersData = await membersResponse.json();
+    
+    res.json({
+      segmentId,
+      timestamp: new Date().toISOString(),
+      segmentDetails: {
+        success: segmentResponse.ok,
+        data: segmentData,
+        segment: segmentData.data?.segment
+      },
+      segmentMembers: {
+        success: membersResponse.ok,
+        memberCount: membersData.data?.customerSegmentMembers?.edges?.length || 0,
+        data: membersData,
+        pageInfo: membersData.data?.customerSegmentMembers?.pageInfo
+      }
+    });
+    
+  } catch (error) {
+    console.error('Champions debug error:', error);
+    res.status(500).json({
+      error: 'Champions debug failed',
+      details: error.message
+    });
+  }
+});
+
 // Start the server
 startServer();
 
