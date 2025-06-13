@@ -712,6 +712,72 @@ app.get('/api/test/segment-members', requireAuth, async (req, res) => {
   }
 });
 
+// Test endpoint for direct email domain customer fetching
+app.get('/api/test/email-domain', requireAuth, async (req, res) => {
+  try {
+    const domain = req.query.domain || 'windflowerflorist.com';
+    console.log(`=== TESTING DIRECT EMAIL DOMAIN CUSTOMER FETCH for domain: ${domain} ===`);
+    
+    // Use Shopify's customer search by email domain
+    const response = await fetch(
+      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/search.json?query=email:*@${domain}`,
+      {
+        headers: {
+          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+        }
+      }
+    );
+    
+    console.log(`📊 Response status: ${response.status}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Search API error:', errorText);
+      return res.json({
+        success: false,
+        error: `HTTP ${response.status}`,
+        details: errorText.substring(0, 500)
+      });
+    }
+    
+    const data = await response.json();
+    const customers = data.customers || [];
+    
+    console.log(`📋 Found ${customers.length} customers with domain ${domain}`);
+    
+    const processedCustomers = customers.map(customer => ({
+      id: customer.id.toString(),
+      first_name: customer.first_name || '',
+      last_name: customer.last_name || '',
+      email: customer.email || '',
+      phone: customer.phone || '',
+      created_at: customer.created_at || new Date().toISOString(),
+      updated_at: customer.updated_at || new Date().toISOString(),
+      tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+      orders_count: customer.orders_count || 0,
+      total_spent: customer.total_spent || '0.00',
+      addresses: customer.addresses || [],
+      display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+      note: customer.note || ''
+    }));
+    
+    res.json({
+      success: true,
+      domain: domain,
+      customerCount: processedCustomers.length,
+      customers: processedCustomers
+    });
+    
+  } catch (error) {
+    console.error('Email domain test error:', error);
+    res.json({
+      success: false,
+      error: error.message,
+      stack: error.stack
+    });
+  }
+});
+
 // Serve React app for all other routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/client/index.html'));
@@ -1054,75 +1120,6 @@ async function getCustomerSegments() {
   }
 }
 
-// Helper function to check if a customer matches segment criteria
-function matchesSegmentCriteria(customer, criteria) {
-  try {
-    console.log(`🔍 Checking customer ${customer.email} against criteria: ${criteria}`);
-    
-    // Simple criteria matching for common patterns
-    if (criteria.includes('customer_email_domain =')) {
-      const domainMatch = criteria.match(/customer_email_domain = '([^']+)'/);
-      if (domainMatch) {
-        const requiredDomain = domainMatch[1];
-        const customerDomain = customer.email ? customer.email.split('@')[1] : '';
-        const matches = customerDomain === requiredDomain;
-        console.log(`📧 Domain check: ${customerDomain} === ${requiredDomain} = ${matches}`);
-        return matches;
-      }
-    }
-    
-    if (criteria.includes('customer_tags CONTAINS')) {
-      const tagMatch = criteria.match(/customer_tags CONTAINS '([^']+)'/);
-      if (tagMatch) {
-        const requiredTag = tagMatch[1];
-        const customerTags = customer.tags || '';
-        const matches = customerTags.includes(requiredTag);
-        console.log(`🏷️ Tag check: "${customerTags}" contains "${requiredTag}" = ${matches}`);
-        return matches;
-      }
-    }
-    
-    if (criteria.includes('number_of_orders')) {
-      const orderMatch = criteria.match(/number_of_orders\s*([><=]+)\s*(\d+)/);
-      if (orderMatch) {
-        const operator = orderMatch[1];
-        const requiredOrders = parseInt(orderMatch[2]);
-        const customerOrders = customer.orders_count || 0;
-        
-        let matches = false;
-        switch (operator) {
-          case '>':
-            matches = customerOrders > requiredOrders;
-            break;
-          case '>=':
-            matches = customerOrders >= requiredOrders;
-            break;
-          case '<':
-            matches = customerOrders < requiredOrders;
-            break;
-          case '<=':
-            matches = customerOrders <= requiredOrders;
-            break;
-          case '=':
-            matches = customerOrders === requiredOrders;
-            break;
-        }
-        
-        console.log(`📦 Orders check: ${customerOrders} ${operator} ${requiredOrders} = ${matches}`);
-        return matches;
-      }
-    }
-    
-    // Default: if we can't parse the criteria, return false
-    console.log(`❓ Unknown criteria format: ${criteria}`);
-    return false;
-    
-  } catch (error) {
-    console.error(`❌ Error matching criteria:`, error);
-    return false;
-  }
-}
-
 // Fallback function for basic segments when Shopify segments API fails
 async function getBasicSegments() {
   console.log('Using fallback basic segments...');
@@ -1352,102 +1349,12 @@ async function getCustomersBySegment(segmentName) {
   }
 }
 
-// Get customers from a real Shopify segment using direct segment API
+// Get customers from a real Shopify segment using REST API with filtering
 async function getCustomersFromShopifySegment(segmentId) {
   try {
-    console.log(`🔄 Starting direct segment API fetch for: ${segmentId}`);
+    console.log(`🔄 Starting REST API fetch for Shopify segment: ${segmentId}`);
     
-    // Extract the numeric ID from the GID
-    const segmentNumericId = segmentId.replace('gid://shopify/Segment/', '');
-    console.log(`📋 Using segment ID: ${segmentNumericId}`);
-    
-    // Use Shopify's direct segment customers endpoint
-    let allCustomers = [];
-    let page = 1;
-    const limit = 250; // Shopify API limit
-    let hasMore = true;
-    
-    while (hasMore) {
-      console.log(`📄 Fetching segment customers page ${page}`);
-      
-      try {
-        // Try the direct segment customers endpoint
-        const response = await fetch(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customer_segments/${segmentNumericId}/customers.json?limit=${limit}&page=${page}`,
-          {
-            headers: {
-              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-            }
-          }
-        );
-        
-        console.log(`📊 Response status: ${response.status}`);
-        
-        if (!response.ok) {
-          // If direct endpoint doesn't work, try alternative approach
-          console.log(`⚠️ Direct segment endpoint failed, trying alternative approach`);
-          return await getCustomersFromShopifySegmentAlternative(segmentId);
-        }
-        
-        const data = await response.json();
-        const customers = data.customers || [];
-        
-        console.log(`📋 Retrieved ${customers.length} customers from segment page ${page}`);
-        
-        if (customers.length === 0) {
-          hasMore = false;
-          break;
-        }
-        
-        const processedCustomers = customers.map(customer => ({
-          id: customer.id.toString(),
-          first_name: customer.first_name || '',
-          last_name: customer.last_name || '',
-          email: customer.email || '',
-          phone: customer.phone || '',
-          created_at: customer.created_at || new Date().toISOString(),
-          updated_at: customer.updated_at || new Date().toISOString(),
-          tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-          orders_count: customer.orders_count || 0,
-          total_spent: customer.total_spent || '0.00',
-          addresses: customer.addresses || [],
-          display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-          note: customer.note || ''
-        }));
-        
-        allCustomers = allCustomers.concat(processedCustomers);
-        console.log(`✅ Processed ${processedCustomers.length} customers (total: ${allCustomers.length})`);
-        
-        // Check if we have more pages
-        if (customers.length < limit) {
-          hasMore = false;
-        } else {
-          page++;
-          // Rate limiting
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-        
-      } catch (error) {
-        console.error(`❌ Error fetching page ${page}:`, error.message);
-        break;
-      }
-    }
-    
-    console.log(`🎉 Successfully retrieved ${allCustomers.length} customers from segment via direct API`);
-    return allCustomers;
-    
-  } catch (error) {
-    console.error(`💥 Critical error getting customers from Shopify segment ${segmentId}:`, error);
-    return [];
-  }
-}
-
-// Alternative approach using GraphQL with proper customer query
-async function getCustomersFromShopifySegmentAlternative(segmentId) {
-  try {
-    console.log(`🔄 Starting alternative GraphQL approach for segment: ${segmentId}`);
-    
-    // Get segment details first
+    // First, get the segment details to understand the filtering criteria
     const segments = await getCustomerSegments();
     const segment = segments.find(s => s.id === segmentId);
     
@@ -1458,220 +1365,10 @@ async function getCustomersFromShopifySegmentAlternative(segmentId) {
     
     console.log(`📋 Segment criteria: ${segment.criteria}`);
     
-    // Use a more targeted approach based on criteria type
-    if (segment.criteria.includes('customer_email_domain')) {
-      return await getCustomersByEmailDomain(segment.criteria);
-    } else if (segment.criteria.includes('customer_tags')) {
-      return await getCustomersByTags(segment.criteria);
-    } else if (segment.criteria.includes('number_of_orders')) {
-      return await getCustomersByOrderCount(segment.criteria);
-    } else {
-      // Fallback to the original REST API approach
-      return await getCustomersFromShopifySegmentFallback(segmentId);
-    }
-    
-  } catch (error) {
-    console.error(`💥 Error in alternative approach:`, error);
-    return [];
-  }
-}
-
-// Get customers by email domain using REST API
-async function getCustomersByEmailDomain(criteria) {
-  try {
-    const domainMatch = criteria.match(/customer_email_domain = '([^']+)'/);
-    if (!domainMatch) return [];
-    
-    const domain = domainMatch[1];
-    console.log(`📧 Fetching customers with email domain: ${domain}`);
-    
-    // Use Shopify's customer search by email domain
-    const response = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/search.json?query=email:*@${domain}`,
-      {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-        }
-      }
-    );
-    
-    if (!response.ok) return [];
-    
-    const data = await response.json();
-    const customers = data.customers || [];
-    
-    console.log(`📋 Found ${customers.length} customers with domain ${domain}`);
-    
-    return customers.map(customer => ({
-      id: customer.id.toString(),
-      first_name: customer.first_name || '',
-      last_name: customer.last_name || '',
-      email: customer.email || '',
-      phone: customer.phone || '',
-      created_at: customer.created_at || new Date().toISOString(),
-      updated_at: customer.updated_at || new Date().toISOString(),
-      tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-      orders_count: customer.orders_count || 0,
-      total_spent: customer.total_spent || '0.00',
-      addresses: customer.addresses || [],
-      display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-      note: customer.note || ''
-    }));
-    
-  } catch (error) {
-    console.error(`❌ Error getting customers by email domain:`, error);
-    return [];
-  }
-}
-
-// Get customers by tags using REST API
-async function getCustomersByTags(criteria) {
-  try {
-    const tagMatch = criteria.match(/customer_tags CONTAINS '([^']+)'/);
-    if (!tagMatch) return [];
-    
-    const tag = tagMatch[1];
-    console.log(`🏷️ Fetching customers with tag: ${tag}`);
-    
-    const response = await fetch(
-      `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=${encodeURIComponent(tag)}&limit=250`,
-      {
-        headers: {
-          'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-        }
-      }
-    );
-    
-    if (!response.ok) return [];
-    
-    const data = await response.json();
-    const customers = data.customers || [];
-    
-    console.log(`📋 Found ${customers.length} customers with tag ${tag}`);
-    
-    return customers.map(customer => ({
-      id: customer.id.toString(),
-      first_name: customer.first_name || '',
-      last_name: customer.last_name || '',
-      email: customer.email || '',
-      phone: customer.phone || '',
-      created_at: customer.created_at || new Date().toISOString(),
-      updated_at: customer.updated_at || new Date().toISOString(),
-      tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-      orders_count: customer.orders_count || 0,
-      total_spent: customer.total_spent || '0.00',
-      addresses: customer.addresses || [],
-      display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-      note: customer.note || ''
-    }));
-    
-  } catch (error) {
-    console.error(`❌ Error getting customers by tags:`, error);
-    return [];
-  }
-}
-
-// Get customers by order count using REST API
-async function getCustomersByOrderCount(criteria) {
-  try {
-    const orderMatch = criteria.match(/number_of_orders\s*([><=]+)\s*(\d+)/);
-    if (!orderMatch) return [];
-    
-    const operator = orderMatch[1];
-    const requiredOrders = parseInt(orderMatch[2]);
-    console.log(`📦 Fetching customers with orders ${operator} ${requiredOrders}`);
-    
-    // Get all customers and filter by order count
+    // Use REST API to get customers with segment filtering
     let allCustomers = [];
     let page = 1;
-    const limit = 250;
-    let hasMore = true;
-    
-    while (hasMore) {
-      const response = await fetch(
-        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=${limit}&page=${page}`,
-        {
-          headers: {
-            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-          }
-        }
-      );
-      
-      if (!response.ok) break;
-      
-      const data = await response.json();
-      const customers = data.customers || [];
-      
-      if (customers.length === 0) {
-        hasMore = false;
-        break;
-      }
-      
-      // Filter by order count
-      const filteredCustomers = customers.filter(customer => {
-        const customerOrders = customer.orders_count || 0;
-        switch (operator) {
-          case '>': return customerOrders > requiredOrders;
-          case '>=': return customerOrders >= requiredOrders;
-          case '<': return customerOrders < requiredOrders;
-          case '<=': return customerOrders <= requiredOrders;
-          case '=': return customerOrders === requiredOrders;
-          default: return false;
-        }
-      });
-      
-      allCustomers = allCustomers.concat(filteredCustomers);
-      
-      if (customers.length < limit) {
-        hasMore = false;
-      } else {
-        page++;
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-    }
-    
-    console.log(`📋 Found ${allCustomers.length} customers with orders ${operator} ${requiredOrders}`);
-    
-    return allCustomers.map(customer => ({
-      id: customer.id.toString(),
-      first_name: customer.first_name || '',
-      last_name: customer.last_name || '',
-      email: customer.email || '',
-      phone: customer.phone || '',
-      created_at: customer.created_at || new Date().toISOString(),
-      updated_at: customer.updated_at || new Date().toISOString(),
-      tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-      orders_count: customer.orders_count || 0,
-      total_spent: customer.total_spent || '0.00',
-      addresses: customer.addresses || [],
-      display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
-      note: customer.note || ''
-    }));
-    
-  } catch (error) {
-    console.error(`❌ Error getting customers by order count:`, error);
-    return [];
-  }
-}
-
-// Fallback to original REST API approach
-async function getCustomersFromShopifySegmentFallback(segmentId) {
-  try {
-    console.log(`🔄 Using fallback REST API approach for segment: ${segmentId}`);
-    
-    const segments = await getCustomerSegments();
-    const segment = segments.find(s => s.id === segmentId);
-    
-    if (!segment) {
-      console.error(`❌ Segment not found: ${segmentId}`);
-      return [];
-    }
-    
-    console.log(`📋 Segment criteria: ${segment.criteria}`);
-    
-    let allCustomers = [];
-    let page = 1;
-    const limit = 250;
+    const limit = 250; // Shopify REST API limit
     let hasMore = true;
     
     while (hasMore) {
@@ -1728,10 +1425,12 @@ async function getCustomersFromShopifySegmentFallback(segmentId) {
         allCustomers = allCustomers.concat(processedCustomers);
         console.log(`✅ Processed ${processedCustomers.length} matching customers (total: ${allCustomers.length})`);
         
+        // Check if we have more pages
         if (customers.length < limit) {
           hasMore = false;
         } else {
           page++;
+          // Rate limiting
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
@@ -1745,7 +1444,117 @@ async function getCustomersFromShopifySegmentFallback(segmentId) {
     return allCustomers;
     
   } catch (error) {
-    console.error(`💥 Critical error in fallback approach:`, error);
+    console.error(`💥 Critical error getting customers from Shopify segment ${segmentId}:`, error);
+    return [];
+  }
+}
+
+// Helper function to check if a customer matches segment criteria
+function matchesSegmentCriteria(customer, criteria) {
+  try {
+    console.log(`🔍 Checking customer ${customer.email} against criteria: ${criteria}`);
+    
+    // Simple criteria matching for common patterns
+    if (criteria.includes('customer_email_domain =')) {
+      const domainMatch = criteria.match(/customer_email_domain = '([^']+)'/);
+      if (domainMatch) {
+        const requiredDomain = domainMatch[1];
+        const customerDomain = customer.email ? customer.email.split('@')[1] : '';
+        const matches = customerDomain === requiredDomain;
+        console.log(`📧 Domain check: ${customerDomain} === ${requiredDomain} = ${matches}`);
+        return matches;
+      }
+    }
+    
+    if (criteria.includes('customer_tags CONTAINS')) {
+      const tagMatch = criteria.match(/customer_tags CONTAINS '([^']+)'/);
+      if (tagMatch) {
+        const requiredTag = tagMatch[1];
+        const customerTags = customer.tags || '';
+        const matches = customerTags.includes(requiredTag);
+        console.log(`🏷️ Tag check: "${customerTags}" contains "${requiredTag}" = ${matches}`);
+        return matches;
+      }
+    }
+    
+    if (criteria.includes('number_of_orders')) {
+      const orderMatch = criteria.match(/number_of_orders\s*([><=]+)\s*(\d+)/);
+      if (orderMatch) {
+        const operator = orderMatch[1];
+        const requiredOrders = parseInt(orderMatch[2]);
+        const customerOrders = customer.orders_count || 0;
+        
+        let matches = false;
+        switch (operator) {
+          case '>':
+            matches = customerOrders > requiredOrders;
+            break;
+          case '>=':
+            matches = customerOrders >= requiredOrders;
+            break;
+          case '<':
+            matches = customerOrders < requiredOrders;
+            break;
+          case '<=':
+            matches = customerOrders <= requiredOrders;
+            break;
+          case '=':
+            matches = customerOrders === requiredOrders;
+            break;
+        }
+        
+        console.log(`📦 Orders check: ${customerOrders} ${operator} ${requiredOrders} = ${matches}`);
+        return matches;
+      }
+    }
+    
+    // Default: if we can't parse the criteria, return false
+    console.log(`❓ Unknown criteria format: ${criteria}`);
+    return false;
+    
+  } catch (error) {
+    console.error(`❌ Error matching criteria:`, error);
+    return false;
+  }
+}
+
+// Fallback function for basic segments using REST API
+async function getCustomersFromBasicSegment(segmentName) {
+  let endpoint = '';
+  
+  switch (segmentName) {
+    case 'All Customers':
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=300`;
+      break;
+    case 'VIP Customers':
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VIP&limit=300`;
+      break;
+    case 'VVIP Customers':
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VVIP&limit=300`;
+      break;
+    case 'New Customers':
+      const thirtyDaysAgo = new Date();
+      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?created_at_min=${thirtyDaysAgo.toISOString()}&limit=300`;
+      break;
+    default:
+      return [];
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      headers: {
+        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    return data.customers || [];
+  } catch (error) {
+    console.error('Error getting customers by basic segment:', error);
     return [];
   }
 }
@@ -1836,47 +1645,6 @@ async function executeTaggingRule(rule) {
   } catch (error) {
     console.error('Error executing tagging rule:', error);
     throw error;
-  }
-}
-
-// Fallback function for basic segments using REST API
-async function getCustomersFromBasicSegment(segmentName) {
-  let endpoint = '';
-  
-  switch (segmentName) {
-    case 'All Customers':
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=300`;
-      break;
-    case 'VIP Customers':
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VIP&limit=300`;
-      break;
-    case 'VVIP Customers':
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=VVIP&limit=300`;
-      break;
-    case 'New Customers':
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      endpoint = `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?created_at_min=${thirtyDaysAgo.toISOString()}&limit=300`;
-      break;
-    default:
-      return [];
-  }
-
-  try {
-    const response = await fetch(endpoint, {
-      headers: {
-        'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) return [];
-    
-    const data = await response.json();
-    return data.customers || [];
-  } catch (error) {
-    console.error('Error getting customers by basic segment:', error);
-    return [];
   }
 }
 
