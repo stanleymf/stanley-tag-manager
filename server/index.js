@@ -1411,11 +1411,11 @@ async function getCustomersFromShopifySegment(segmentId) {
     } else if (segment.criteria.includes('customer_tags')) {
       const tagMatch = segment.criteria.match(/customer_tags CONTAINS '([^']+)'/);
       if (tagMatch) {
-        const tag = tagMatch[1];
-        console.log(`🏷️ Fetching customers with tag: ${tag}`);
+        const requiredTag = tagMatch[1];
+        console.log(`🏷️ Fetching customers with tag: ${requiredTag}`);
         
         const response = await fetch(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=${encodeURIComponent(tag)}&limit=250`,
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=${encodeURIComponent(requiredTag)}&limit=250`,
           {
             headers: {
               'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
@@ -1428,7 +1428,49 @@ async function getCustomersFromShopifySegment(segmentId) {
         const data = await response.json();
         const customers = data.customers || [];
         
-        console.log(`📋 Found ${customers.length} customers with tag ${tag}`);
+        console.log(`📋 Found ${customers.length} customers with tag ${requiredTag}`);
+        
+        return customers.map(customer => ({
+          id: customer.id.toString(),
+          first_name: customer.first_name || '',
+          last_name: customer.last_name || '',
+          email: customer.email || '',
+          phone: customer.phone || '',
+          created_at: customer.created_at || new Date().toISOString(),
+          updated_at: customer.updated_at || new Date().toISOString(),
+          tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
+          orders_count: customer.orders_count || 0,
+          total_spent: customer.total_spent || '0.00',
+          addresses: customer.addresses || [],
+          display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+          note: customer.note || ''
+        }));
+      }
+    } else if (segment.criteria.includes('rfm_group')) {
+      const rfmMatch = segment.criteria.match(/rfm_group = '([^']+)'/);
+      if (rfmMatch) {
+        const requiredRfmGroup = rfmMatch[1];
+        console.log(`🏆 Fetching customers with RFM group: ${requiredRfmGroup}`);
+        
+        // RFM groups are typically stored as customer tags in Shopify
+        const response = await fetch(
+          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?tags=${encodeURIComponent(requiredRfmGroup)}&limit=250`,
+          {
+            headers: {
+              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            }
+          }
+        );
+        
+        if (!response.ok) {
+          console.error(`❌ RFM group API error: ${response.status}`);
+          return [];
+        }
+        
+        const data = await response.json();
+        const customers = data.customers || [];
+        
+        console.log(`📋 Found ${customers.length} customers with RFM group ${requiredRfmGroup}`);
         
         return customers.map(customer => ({
           id: customer.id.toString(),
@@ -1549,13 +1591,24 @@ function matchesSegmentCriteria(customer, criteria) {
       }
     }
     
-    if (criteria.includes('customer_tags CONTAINS')) {
+    if (criteria.includes('customer_tags')) {
       const tagMatch = criteria.match(/customer_tags CONTAINS '([^']+)'/);
       if (tagMatch) {
         const requiredTag = tagMatch[1];
         const customerTags = customer.tags || '';
         const matches = customerTags.includes(requiredTag);
         console.log(`🏷️ Tag check: "${customerTags}" contains "${requiredTag}" = ${matches}`);
+        return matches;
+      }
+    }
+    
+    if (criteria.includes('rfm_group =')) {
+      const rfmMatch = criteria.match(/rfm_group = '([^']+)'/);
+      if (rfmMatch) {
+        const requiredRfmGroup = rfmMatch[1];
+        const customerTags = customer.tags || '';
+        const matches = customerTags.includes(requiredRfmGroup);
+        console.log(`🏆 RFM group check: "${customerTags}" contains "${requiredRfmGroup}" = ${matches}`);
         return matches;
       }
     }
