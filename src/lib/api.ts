@@ -8,11 +8,17 @@ interface ApiResponse<T> {
 
 export interface ShopifyCustomer {
   id: string;
-  email: string;
   first_name: string;
   last_name: string;
+  email: string;
+  created_at: string;
+  updated_at: string;
   tags: string;
-  created_at?: string;
+  orders_count: number;
+  total_spent: string;
+  addresses?: any[];
+  display_name?: string;
+  note?: string;
 }
 
 export interface CustomerSegment {
@@ -24,6 +30,7 @@ export interface CustomerSegment {
   description?: string;
   createdAt?: string;
   updatedAt?: string;
+  needsCustomerCount?: boolean; // Flag to indicate if count needs to be fetched
 }
 
 export interface TaggingRule {
@@ -157,6 +164,46 @@ class ApiService {
     }
     
     return result.segments;
+  }
+
+  // Get customer count for a specific segment
+  async getSegmentCustomerCount(segmentName: string): Promise<{
+    success: boolean;
+    segment: string;
+    segmentId: string;
+    customerCount: number;
+    fetchedAt: string;
+  }> {
+    return this.request<{
+      success: boolean;
+      segment: string;
+      segmentId: string;
+      customerCount: number;
+      fetchedAt: string;
+    }>(`/segments/count?segment=${encodeURIComponent(segmentName)}`);
+  }
+
+  // Sync all customers from a specific segment (with full pagination)
+  async syncCustomersInSegment(segmentName: string): Promise<{
+    success: boolean;
+    message: string;
+    segment: string;
+    segmentId?: string;
+    expectedCount?: number;
+    actualCount: number;
+    customers: ShopifyCustomer[];
+    syncedAt: string;
+  }> {
+    return this.request<{
+      success: boolean;
+      message: string;
+      segment: string;
+      segmentId?: string;
+      expectedCount?: number;
+      actualCount: number;
+      customers: ShopifyCustomer[];
+      syncedAt: string;
+    }>(`/customers/sync?segment=${encodeURIComponent(segmentName)}`);
   }
 }
 
