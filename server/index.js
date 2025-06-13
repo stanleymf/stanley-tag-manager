@@ -157,7 +157,7 @@ app.use(cors({
 app.use(express.json());
 
 // Serve static files from dist directory (after all API routes)
-app.use(express.static(path.join(__dirname, '../dist/client')));
+// app.use(express.static(path.join(__dirname, '../dist/client')));
 
 // Cache for segments (fallback when database is not available)
 let segmentsCache = null;
