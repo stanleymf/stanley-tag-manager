@@ -1080,6 +1080,291 @@ app.get('/api/test/segment/:segmentId', async (req, res) => {
   }
 });
 
+// Debug endpoint to understand customer data and segment criteria matching
+app.get('/api/debug/segment/:segmentId', async (req, res) => {
+  try {
+    const { segmentId } = req.params;
+    console.log(`🔍 Debugging segment: ${segmentId}`);
+    
+    // Get segment details from database
+    const segment = await db.get('SELECT * FROM segments WHERE id = ?', [segmentId]);
+    if (!segment) {
+      return res.status(404).json({ error: 'Segment not found' });
+    }
+    
+    const debugInfo = {
+      segment: {
+        id: segment.id,
+        name: segment.name,
+        criteria: segment.criteria,
+        created_at: segment.created_at
+      },
+      analysis: {}
+    };
+    
+    console.log(`📋 Analyzing segment criteria: ${segment.criteria}`);
+    
+    // Step 1: Parse the criteria to understand what we're looking for
+    if (segment.criteria.includes('rfm_group')) {
+      const rfmMatch = segment.criteria.match(/rfm_group = '([^']+)'/);
+      if (rfmMatch) {
+        const rfmGroup = rfmMatch[1];
+        debugInfo.analysis.criteria_type = 'rfm_group';
+        debugInfo.analysis.target_value = rfmGroup;
+        debugInfo.analysis.parsed_criteria = `Looking for customers with RFM group: ${rfmGroup}`;
+      }
+    } else if (segment.criteria.includes('customer_email_domain')) {
+      const domainMatch = segment.criteria.match(/customer_email_domain = '([^']+)'/);
+      if (domainMatch) {
+        const domain = domainMatch[1];
+        debugInfo.analysis.criteria_type = 'email_domain';
+        debugInfo.analysis.target_value = domain;
+        debugInfo.analysis.parsed_criteria = `Looking for customers with email domain: ${domain}`;
+      }
+    } else if (segment.criteria.includes('customer_tags')) {
+      const tagsMatch = segment.criteria.match(/customer_tags = '([^']+)'/);
+      if (tagsMatch) {
+        const tags = tagsMatch[1];
+        debugInfo.analysis.criteria_type = 'tags';
+        debugInfo.analysis.target_value = tags;
+        debugInfo.analysis.parsed_criteria = `Looking for customers with tags: ${tags}`;
+      }
+    }
+    
+    // Step 2: Get a sample of customers to see what data we have
+    try {
+      const customersResponse = await fetch(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=20`,
+        {
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+          }
+        }
+      );
+      
+      if (customersResponse.ok) {
+        const customersData = await customersResponse.json();
+        const customers = customersData.customers || [];
+        
+        debugInfo.analysis.total_customers_available = customers.length;
+        debugInfo.analysis.sample_customers = customers.map(customer => ({
+          id: customer.id,
+          email: customer.email,
+          first_name: customer.first_name,
+          last_name: customer.last_name,
+          orders_count: customer.orders_count,
+          total_spent: customer.total_spent,
+          tags: customer.tags,
+          created_at: customer.created_at,
+          updated_at: customer.updated_at
+        }));
+        
+        // Step 3: Analyze how many customers match our criteria
+        let matchingCustomers = [];
+        
+        if (debugInfo.analysis.criteria_type === 'rfm_group') {
+          const rfmGroup = debugInfo.analysis.target_value;
+          
+          // Calculate RFM groups for each customer
+          matchingCustomers = customers.filter(customer => {
+            const ordersCount = customer.orders_count || 0;
+            const totalSpent = parseFloat(customer.total_spent || '0');
+            
+            let calculatedRfmGroup = 'AT_RISK';
+            if (ordersCount >= 5 && totalSpent >= 500) {
+              calculatedRfmGroup = 'CHAMPIONS';
+            } else if (ordersCount >= 3 && totalSpent >= 200) {
+              calculatedRfmGroup = 'LOYAL_CUSTOMERS';
+            } else if (ordersCount >= 1 && totalSpent >= 50) {
+              calculatedRfmGroup = 'AT_RISK';
+            } else {
+              calculatedRfmGroup = 'CANT_LOSE';
+            }
+            
+            return calculatedRfmGroup === rfmGroup;
+          });
+          
+          debugInfo.analysis.rfm_calculation = {
+            target_rfm_group: rfmGroup,
+            customers_with_rfm_calculation: customers.map(customer => {
+              const ordersCount = customer.orders_count || 0;
+              const totalSpent = parseFloat(customer.total_spent || '0');
+              
+              let calculatedRfmGroup = 'AT_RISK';
+              if (ordersCount >= 5 && totalSpent >= 500) {
+                calculatedRfmGroup = 'CHAMPIONS';
+              } else if (ordersCount >= 3 && totalSpent >= 200) {
+                calculatedRfmGroup = 'LOYAL_CUSTOMERS';
+              } else if (ordersCount >= 1 && totalSpent >= 50) {
+                calculatedRfmGroup = 'AT_RISK';
+              } else {
+                calculatedRfmGroup = 'CANT_LOSE';
+              }
+              
+              return {
+                id: customer.id,
+                email: customer.email,
+                orders_count: ordersCount,
+                total_spent: totalSpent,
+                calculated_rfm_group: calculatedRfmGroup,
+                matches_target: calculatedRfmGroup === rfmGroup
+              };
+            })
+          };
+          
+        } else if (debugInfo.analysis.criteria_type === 'email_domain') {
+          const domain = debugInfo.analysis.target_value;
+          matchingCustomers = customers.filter(customer => 
+            customer.email && customer.email.toLowerCase().includes(`@${domain.toLowerCase()}`)
+          );
+          
+        } else if (debugInfo.analysis.criteria_type === 'tags') {
+          const targetTags = debugInfo.analysis.target_value.split(',').map(tag => tag.trim());
+          matchingCustomers = customers.filter(customer => {
+            const customerTags = customer.tags ? customer.tags.split(',').map(tag => tag.trim()) : [];
+            return targetTags.some(tag => customerTags.includes(tag));
+          });
+        }
+        
+        debugInfo.analysis.matching_customers_count = matchingCustomers.length;
+        debugInfo.analysis.matching_customers = matchingCustomers.map(customer => ({
+          id: customer.id,
+          email: customer.email,
+          first_name: customer.first_name,
+          last_name: customer.last_name,
+          orders_count: customer.orders_count,
+          total_spent: customer.total_spent,
+          tags: customer.tags
+        }));
+        
+        // Step 4: Test different API approaches
+        debugInfo.analysis.api_tests = {};
+        
+        // Test 1: Direct search API
+        if (debugInfo.analysis.criteria_type === 'rfm_group') {
+          try {
+            const searchResponse = await fetch(
+              `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers/search.json?query=rfm_group:${debugInfo.analysis.target_value}`,
+              {
+                headers: {
+                  'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+                }
+              }
+            );
+            
+            debugInfo.analysis.api_tests.search_api = {
+              status: searchResponse.status,
+              ok: searchResponse.ok,
+              query: `rfm_group:${debugInfo.analysis.target_value}`
+            };
+            
+            if (searchResponse.ok) {
+              const searchData = await searchResponse.json();
+              debugInfo.analysis.api_tests.search_api.customers_found = searchData.customers?.length || 0;
+              debugInfo.analysis.api_tests.search_api.sample_results = searchData.customers?.slice(0, 3) || [];
+            }
+          } catch (error) {
+            debugInfo.analysis.api_tests.search_api = {
+              status: 'error',
+              ok: false,
+              error: error.message
+            };
+          }
+        }
+        
+        // Test 2: GraphQL approach
+        try {
+          let graphqlQuery = '';
+          if (debugInfo.analysis.criteria_type === 'rfm_group') {
+            graphqlQuery = `
+              query testRfmGroup($first: Int!) {
+                customers(first: $first, query: "rfm_group:${debugInfo.analysis.target_value}") {
+                  edges {
+                    node {
+                      id
+                      email
+                      ordersCount
+                      totalSpent
+                    }
+                  }
+                }
+              }
+            `;
+          } else if (debugInfo.analysis.criteria_type === 'email_domain') {
+            graphqlQuery = `
+              query testEmailDomain($first: Int!) {
+                customers(first: $first, query: "email:*@${debugInfo.analysis.target_value}") {
+                  edges {
+                    node {
+                      id
+                      email
+                    }
+                  }
+                }
+              }
+            `;
+          }
+          
+          if (graphqlQuery) {
+            const graphqlResponse = await fetch(
+              `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+              {
+                method: 'POST',
+                headers: {
+                  'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  query: graphqlQuery,
+                  variables: {
+                    first: 10
+                  }
+                })
+              }
+            );
+            
+            debugInfo.analysis.api_tests.graphql = {
+              status: graphqlResponse.status,
+              ok: graphqlResponse.ok
+            };
+            
+            if (graphqlResponse.ok) {
+              const graphqlData = await graphqlResponse.json();
+              debugInfo.analysis.api_tests.graphql.errors = graphqlData.errors;
+              debugInfo.analysis.api_tests.graphql.customers_found = graphqlData.data?.customers?.edges?.length || 0;
+              debugInfo.analysis.api_tests.graphql.sample_results = graphqlData.data?.customers?.edges?.slice(0, 3) || [];
+            }
+          }
+        } catch (error) {
+          debugInfo.analysis.api_tests.graphql = {
+            status: 'error',
+            ok: false,
+            error: error.message
+          };
+        }
+        
+      } else {
+        debugInfo.analysis.customer_fetch_error = {
+          status: customersResponse.status,
+          message: 'Failed to fetch customers'
+        };
+      }
+    } catch (error) {
+      debugInfo.analysis.customer_fetch_error = {
+        status: 'error',
+        message: error.message
+      };
+    }
+    
+    console.log(`✅ Debug analysis for segment ${segmentId}:`, JSON.stringify(debugInfo, null, 2));
+    res.json(debugInfo);
+    
+  } catch (error) {
+    console.error('Error debugging segment:', error);
+    res.status(500).json({ error: 'Failed to debug segment', details: error.message });
+  }
+});
+
 // Serve React app for all other routes
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/client/index.html'));
