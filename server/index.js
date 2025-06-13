@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import fs from 'fs';
 import * as db from './database.js';
 
 dotenv.config();
@@ -440,6 +441,31 @@ app.get('/api/health', async (req, res) => {
   }
 
   res.json(config);
+});
+
+// Version endpoint
+app.get('/api/version', (req, res) => {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync('./package.json', 'utf8'));
+    res.json({
+      version: packageJson.version,
+      tagManagerVersion: packageJson.tagManagerVersion,
+      versionNotes: packageJson.versionNotes,
+      deployedAt: new Date().toISOString(),
+      lastCommit: process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown',
+      environment: process.env.NODE_ENV || 'production'
+    });
+  } catch (error) {
+    res.json({
+      version: '1.0.0',
+      tagManagerVersion: '1.0.0',
+      versionNotes: 'Initial release with comprehensive pagination and RFM group support',
+      deployedAt: new Date().toISOString(),
+      lastCommit: 'unknown',
+      environment: process.env.NODE_ENV || 'production',
+      error: 'Could not read package.json'
+    });
+  }
 });
 
 // Debug endpoint to show environment variables
