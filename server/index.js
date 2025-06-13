@@ -1207,95 +1207,133 @@ async function getCustomersBySegment(segmentName) {
 // Get customers from a real Shopify segment using GraphQL with full pagination
 async function getCustomersFromShopifySegment(segmentId) {
   try {
-    console.log(`🔄 Starting REST API fetch for Shopify segment: ${segmentId}`);
+    console.log(`🔄 Starting GraphQL fetch for Shopify segment: ${segmentId}`);
     
-    // First, get the segment details to understand the filtering criteria
-    const segments = await getCustomerSegments();
-    const segment = segments.find(s => s.id === segmentId);
-    
-    if (!segment) {
-      console.error(`❌ Segment not found: ${segmentId}`);
-      return [];
-    }
-    
-    console.log(`📋 Segment criteria: ${segment.criteria}`);
-    
-    // Use REST API to get customers with segment filtering
     let allCustomers = [];
-    let page = 1;
-    const limit = 250; // Shopify REST API limit
-    let hasMore = true;
+    let hasNextPage = true;
+    let cursor = null;
+    const limit = 250; // Shopify GraphQL limit
     
-    while (hasMore) {
-      console.log(`📄 Fetching customers page ${page} via REST API`);
+    while (hasNextPage) {
+      console.log(`📄 Fetching customers via GraphQL (cursor: ${cursor || 'null'})`);
       
-      try {
-        const response = await fetch(
-          `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/customers.json?limit=${limit}&page=${page}`,
-          {
-            headers: {
-              'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+      const query = `
+        query getSegmentCustomers($segmentId: ID!, $first: Int!, $after: String) {
+          customerSegmentMembers(segmentId: $segmentId, first: $first, after: $after) {
+            edges {
+              node {
+                id
+                firstName
+                lastName
+                email
+                phone
+                numberOfOrders
+                tags
+                createdAt
+                updatedAt
+                addresses {
+                  id
+                  firstName
+                  lastName
+                  address1
+                  address2
+                  city
+                  province
+                  country
+                  zip
+                  phone
+                }
+                note
+              }
+            }
+            pageInfo {
+              hasNextPage
+              hasPreviousPage
+              startCursor
+              endCursor
             }
           }
-        );
-        
-        if (!response.ok) {
-          console.error(`❌ REST API error: ${response.status}`);
-          break;
         }
-        
-        const data = await response.json();
-        const customers = data.customers || [];
-        
-        console.log(`📋 Retrieved ${customers.length} customers from page ${page}`);
-        
-        if (customers.length === 0) {
-          hasMore = false;
-          break;
+      `;
+      
+      const variables = {
+        segmentId,
+        first: limit,
+        after: cursor
+      };
+      
+      const response = await fetch(
+        `${process.env.SHOPIFY_STORE_URL}/admin/api/2023-10/graphql.json`,
+        {
+          method: 'POST',
+          headers: {
+            'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query,
+            variables
+          })
         }
-        
-        // Filter customers based on segment criteria
-        const filteredCustomers = customers.filter(customer => {
-          return matchesSegmentCriteria(customer, segment.criteria);
-        });
-        
-        console.log(`🔍 Filtered ${filteredCustomers.length} customers matching criteria from page ${page}`);
-        
-        const processedCustomers = filteredCustomers.map(customer => ({
-          id: customer.id.toString(),
-          first_name: customer.first_name || '',
-          last_name: customer.last_name || '',
+      );
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`❌ GraphQL error: ${response.status}`, errorText.substring(0, 200));
+        break;
+      }
+      
+      const data = await response.json();
+      
+      if (data.errors) {
+        console.error(`❌ GraphQL errors:`, data.errors);
+        break;
+      }
+      
+      const edges = data.data?.customerSegmentMembers?.edges || [];
+      const pageInfo = data.data?.customerSegmentMembers?.pageInfo;
+      
+      console.log(`📋 Retrieved ${edges.length} customers from GraphQL`);
+      
+      if (edges.length === 0) {
+        hasMore = false;
+        break;
+      }
+      
+      // Process customers
+      const processedCustomers = edges.map(edge => {
+        const customer = edge.node;
+        return {
+          id: customer.id.toString().replace('gid://shopify/Customer/', ''),
+          first_name: customer.firstName || '',
+          last_name: customer.lastName || '',
           email: customer.email || '',
           phone: customer.phone || '',
-          created_at: customer.created_at || new Date().toISOString(),
-          updated_at: customer.updated_at || new Date().toISOString(),
+          created_at: customer.createdAt || new Date().toISOString(),
+          updated_at: customer.updatedAt || new Date().toISOString(),
           tags: Array.isArray(customer.tags) ? customer.tags.join(', ') : (customer.tags || ''),
-          orders_count: customer.orders_count || 0,
-          total_spent: customer.total_spent || '0.00',
+          orders_count: parseInt(customer.numberOfOrders) || 0,
+          total_spent: '0.00', // Not available in this query
           addresses: customer.addresses || [],
-          display_name: `${customer.first_name || ''} ${customer.last_name || ''}`.trim(),
+          display_name: `${customer.firstName || ''} ${customer.lastName || ''}`.trim(),
           note: customer.note || ''
-        }));
-        
-        allCustomers = allCustomers.concat(processedCustomers);
-        console.log(`✅ Processed ${processedCustomers.length} matching customers (total: ${allCustomers.length})`);
-        
-        // Check if we have more pages
-        if (customers.length < limit) {
-          hasMore = false;
-        } else {
-          page++;
-          // Rate limiting
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-        
-      } catch (error) {
-        console.error(`❌ Error fetching page ${page}:`, error.message);
-        break;
+        };
+      });
+      
+      allCustomers = allCustomers.concat(processedCustomers);
+      console.log(`✅ Processed ${processedCustomers.length} customers (total: ${allCustomers.length})`);
+      
+      // Check pagination
+      hasNextPage = pageInfo?.hasNextPage || false;
+      cursor = pageInfo?.endCursor || null;
+      
+      // Rate limiting
+      if (hasNextPage) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
     
-    console.log(`🎉 Successfully retrieved ${allCustomers.length} customers matching segment criteria via REST API`);
+    console.log(`🎉 Successfully retrieved ${allCustomers.length} customers from segment via GraphQL`);
     return allCustomers;
     
   } catch (error) {
