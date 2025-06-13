@@ -1112,9 +1112,15 @@ async function getBasicSegments() {
 // Get customer count for a specific Shopify segment
 async function getSegmentCustomerCount(segmentId) {
   try {
+    // Use a different approach - get a small sample and check if there are any customers
     const query = `
       query getSegmentCount($segmentId: ID!) {
         customerSegmentMembers(segmentId: $segmentId, first: 1) {
+          edges {
+            node {
+              id
+            }
+          }
           pageInfo {
             hasNextPage
             hasPreviousPage
@@ -1151,13 +1157,12 @@ async function getSegmentCustomerCount(segmentId) {
       return 0;
     }
     
-    // Since we can't get totalCount directly, we'll use the count from segments list
-    // This is a workaround - we'll get the count from the segments API instead
-    const segments = await getCustomerSegments();
-    const segment = segments.find(s => s.id === segmentId);
-    const count = segment?.customerCount || 0;
+    // If we get any customers, we know there are customers in this segment
+    // For now, let's use a fallback approach - get all customers and count them
+    const customers = await getCustomersFromShopifySegment(segmentId);
+    const count = customers.length;
     
-    console.log(`📊 Segment ${segmentId}: ${count} customers (from segments list)`);
+    console.log(`📊 Segment ${segmentId}: ${count} customers (from actual customer fetch)`);
     return count;
 
   } catch (error) {
